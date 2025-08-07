@@ -100,9 +100,9 @@
         </div>
         
         <div class="controls">
-            <button class="btn-primary" onclick="captureImage()">이미지 캡처 (S)</button>
             <button class="btn-success" id="record-btn" onclick="toggleRecording()">녹화 시작 (N)</button>
             <button class="btn-primary" onclick="refreshStatus()">상태 새로고침</button>
+            <button class="btn-primary" onclick="sendToServer()">서버 전송</button>
         </div>
         
         <div class="status" id="status">
@@ -203,6 +203,16 @@
             }
         }
         
+        async function sendToServer() {
+            try {
+                const response = await fetch('/webcam/send_to_server', { method: 'POST' });
+                const data = await response.json();
+                showMessage(data.message || data.error, data.error ? 'error' : 'success');
+            } catch (error) {
+                showMessage('서버 전송 중 오류가 발생했습니다: ' + error.message, 'error');
+            }
+        }
+
         // 메시지 표시 함수
         function showMessage(message, type = 'success') {
             const messagesDiv = document.getElementById('messages');

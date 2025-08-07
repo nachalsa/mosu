@@ -1,6 +1,8 @@
 from fastapi import APIRouter
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from .webcam import WebcamCapture
+import traceback
+import logging
 
 router = APIRouter()
 webcam = WebcamCapture()
@@ -49,3 +51,14 @@ async def get_status():
         "video_count": webcam.video_count,
         "image_count": webcam.image_count
     }
+
+@router.post("/send_to_server")
+async def send_to_server():
+    try:
+        result = webcam.process_latest_folder_with_yolo()
+        return JSONResponse({"message": result})
+    except Exception as e:
+                # 콘솔에 전체 에러 스택 출력
+        traceback.print_exc()
+        logging.error(f"send_to_server error: {e}")
+        return JSONResponse({"error": str(e)}, status_code=500)

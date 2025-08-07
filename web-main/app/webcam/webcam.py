@@ -2,6 +2,8 @@ import cv2
 import os
 import time
 import datetime
+from yolo.edge_yolo_detector import EdgeYOLODetector
+import glob
 
 class WebcamCapture:
     def __init__(self):
@@ -17,8 +19,11 @@ class WebcamCapture:
         self.image_count = 0
         self.w = 640
         self.h = 480
-        self.fps = 30
+        self.fps = 15
         
+        self.yolo = EdgeYOLODetector()  # YOLO 인스턴스 추가
+        self.crop_folder = None
+
         # 폴더 생성
         os.makedirs(self.video_folder, exist_ok=True)
         os.makedirs(self.image_folder, exist_ok=True)
@@ -78,6 +83,7 @@ class WebcamCapture:
                     self.capture_folder, f"img_{self.capture_image_count:04d}.jpg"
                 )
                 cv2.imwrite(image_path, frame)
+
             return frame
         return None
     
@@ -124,3 +130,31 @@ class WebcamCapture:
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
             time.sleep(0.03)  # 약 30fps
+
+    def process_latest_folder_with_yolo(self):
+            """가장 최근 폴더의 이미지를 YOLO로 크롭"""
+            base_dir = "captured_datas"
+            if not os.path.exists(base_dir):
+                return "저장된 폴더가 없습니다."
+            folders = [os.path.join(base_dir, d) for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+            if not folders:
+                return "저장된 폴더가 없습니다."
+            latest_folder = max(folders, key=os.path.getmtime)
+            crop_folder = latest_folder + "-crop"
+            os.makedirs(crop_folder, exist_ok=True)
+            images = sorted(glob.glob(os.path.join(latest_folder, "*.jpg")))
+            count = 0
+            for img_path in images:
+                frame = cv2.imread(img_path)
+                if frame is None:
+                    continue
+                person_boxes = self.yolo.detect_persons(frame)
+                for i, bbox in enumerate(person_boxes):
+                    crop_img = self.yolo.crop_person_image_rtmw(frame, bbox)
+                    if crop_img is not None:
+                        crop_path = os.path.join(
+                            crop_folder, f"{os.path.splitext(os.path.basename(img_path))[0]}_{i+1}.jpg"
+                        )
+                        cv2.imwrite(crop_path, crop_img)
+                        count += 1
+            return f"YOLO 크롭 완료: {count}개 이미지 저장 ({crop_folder})"
