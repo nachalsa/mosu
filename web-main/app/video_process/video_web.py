@@ -66,13 +66,20 @@ async def video_result_images():
     if not folder:
         return JSONResponse({"images": []})
     images = sorted(glob.glob(os.path.join(folder, "*.jpg")))
-    # 이미지 파일명만 반환
-    image_urls = [f"/video_result/image/{os.path.basename(img)}" for img in images]
-    return JSONResponse({"images": image_urls})
+    # 이미지 URL과 단어(파일명에서 추출) 같이 반환
+    image_infos = [
+        {
+            "url": f"/video_result/image/{os.path.basename(img)}",
+            "word": os.path.basename(img).split('.')[0]
+        }
+        for img in images
+    ]
+    return JSONResponse({"images": image_infos})
 
 @router.get("/image/{filename}")
 async def get_image(filename: str):
     folder = get_latest_capture_folder()
+    print(f"🔍 이미지 요청: {filename} (폴더: {folder})")
     if not folder:
         return JSONResponse(status_code=404, content={"detail": "Not found"})
     img_path = os.path.join(folder, filename)

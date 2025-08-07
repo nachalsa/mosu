@@ -24,61 +24,65 @@
     </div>
         
     <script>
-    let images = [];
-    let idx = 0;
-    let playing = false;
-    let intervalId = null;
+        let images = [];
+        let idx = 0;
+        let playing = false;
+        let intervalId = null;
 
-    async function fetchImages() {
-        const res = await fetch('/video_result/video_result_images');
-        const data = await res.json();
-        images = data.images || [];
-        idx = 0;
-    }
+        // 이미지 프리로드 함수
+        function preloadImages(imageInfos) {
+            imageInfos.forEach(info => {
+                const img = new Image();
+                img.src = info.url;
+            });
+        }
 
-    async function showFrame() {
-        if (images.length === 0) return;
-        const videoElem = document.getElementById('video-seq');
-        const wordElem = document.getElementById('word');
-        videoElem.src = images[idx];
+        async function fetchImages() {
+            const res = await fetch('/video_result/video_result_images');
+            const data = await res.json();
+            images = data.images || [];
+            idx = 0;
+            preloadImages(images);
+        }
 
-        // 단어 정보 가져오기
-        const filename = images[idx].split('/').pop();
-        const res = await fetch(`/video_result/video_result_word?filename=${filename}`);
-        const data = await res.json();
-        wordElem.textContent = "단어: " + (data.word || "");
+        function showFrame() {
+            if (images.length === 0) return;
+            const videoElem = document.getElementById('video-seq');
+            const wordElem = document.getElementById('word');
 
-        idx = (idx + 1) % images.length;
-    }
+            videoElem.src = images[idx].url; // 반드시 .url로!
+            wordElem.textContent = "단어: " + (images[idx].word || "");
+            idx = (idx + 1) % images.length;
+        }
 
-    function playSequence() {
-        if (playing) return;
-        playing = true;
-        intervalId = setInterval(showFrame, 200);
-    }
+        function playSequence() {
+            if (playing) return;
+            playing = true;
+            intervalId = setInterval(showFrame, 40); // 더 빠르게 (40ms = 25fps)
+        }
 
-    function stopSequence() {
-        playing = false;
-        if (intervalId) clearInterval(intervalId);
-    }
+        function stopSequence() {
+            playing = false;
+            if (intervalId) clearInterval(intervalId);
+        }
 
-    document.getElementById('play-btn').onclick = async () => {
-        stopSequence();
-        await fetchImages();
-        playSequence();
-    };
-    document.getElementById('replay-btn').onclick = async () => {
-        stopSequence();
-        await fetchImages();
-        playSequence();
-    };
+        document.getElementById('play-btn').onclick = async () => {
+            stopSequence();
+            await fetchImages();
+            playSequence();
+        };
+        document.getElementById('replay-btn').onclick = async () => {
+            stopSequence();
+            await fetchImages();
+            playSequence();
+        };
 
-    // 최초 자동 재생
-    (async () => {
-        await fetchImages();
-        playSequence();
-    })();
-    </script>
+        // 최초 자동 재생
+        (async () => {
+            await fetchImages();
+            playSequence();
+        })();
+</script>
 
 </body>
 </html>
