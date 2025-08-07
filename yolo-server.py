@@ -151,11 +151,11 @@ class EdgeYOLODetector:
                             filtered_boxes = filtered_boxes.cpu().numpy()
                             filtered_confs = filtered_confs.cpu().numpy()
                         
-                        # 신뢰도순 정렬
-                        sorted_indices = np.argsort(filtered_confs)[::-1]
-                        sorted_boxes = filtered_boxes[sorted_indices]
+                        # 신뢰도순 정렬하여 가장 높은 신뢰도의 박스만 선택
+                        best_idx = np.argmax(filtered_confs)
+                        best_box = filtered_boxes[best_idx]
                         
-                        person_boxes.extend(sorted_boxes.tolist())
+                        person_boxes.append(best_box.tolist())
             
             return person_boxes
             
@@ -290,6 +290,49 @@ class EdgeServer:
             print(f"⚠️ 이미지 전송 실패: {e}")
             return None
     
+    def transform_keypoints_to_original(self, keypoints: np.ndarray, bbox: List[float]) -> np.ndarray:
+        """크롭 좌표(288x384)의 키포인트를 원본 이미지 좌표로 변환"""
+        try:
+            # RTMW와 동일한 변환 과정을 역변환
+            input_width, input_height = 288, 384
+            
+            # 1. bbox를 center, scale로 변환 (crop 시와 동일)
+            bbox_array = np.array(bbox, dtype=np.float32)
+            center, scale = bbox_xyxy2cs(bbox_array)
+            
+            # 2. aspect ratio 고정 (crop 시와 동일)
+            aspect_ratio = input_width / input_height  # 0.75
+            scale = fix_aspect_ratio(scale, aspect_ratio)
+            
+            # 3. 아핀 변환 매트릭스 계산 (crop 시와 동일)
+            warp_mat = get_warp_matrix(
+                center=center,
+                scale=scale,
+                rot=0.0,
+                output_size=(input_width, input_height)
+            )
+            
+            # 4. 역변환 매트릭스 계산
+            inv_warp_mat = cv2.invertAffineTransform(warp_mat)
+            
+            # 5. 키포인트를 homogeneous coordinates로 변환
+            num_keypoints = keypoints.shape[0]
+            kpts_homo = np.ones((num_keypoints, 3))
+            kpts_homo[:, :2] = keypoints[:, :2]
+            
+            # 6. 역변환 적용
+            original_keypoints = np.zeros_like(keypoints)
+            for i in range(num_keypoints):
+                transformed_pt = inv_warp_mat @ kpts_homo[i]
+                original_keypoints[i, 0] = transformed_pt[0]
+                original_keypoints[i, 1] = transformed_pt[1]
+            
+            return original_keypoints
+            
+        except Exception as e:
+            print(f"⚠️ 키포인트 변환 실패: {e}")
+            return keypoints  # 실패시 원본 반환
+    
     def visualize_results(self, image: np.ndarray, person_boxes: List[List[float]], 
                          pose_results: List[dict]) -> np.ndarray:
         """결과 시각화"""
@@ -303,34 +346,35 @@ class EdgeServer:
             cv2.putText(vis_image, f"Person {i+1}", (x1, y1-10), 
                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
         
-        # 포즈 결과가 있으면 키포인트 그리기 (원본 좌표로 변환 필요)
+        # 포즈 결과가 있으면 키포인트 그리기 (정확한 좌표 변환)
         for i, pose_result in enumerate(pose_results):
-            if pose_result and 'keypoints' in pose_result:
+            if pose_result and 'keypoints' in pose_result and i < len(person_boxes):
                 keypoints = np.array(pose_result['keypoints'])
                 scores = np.array(pose_result['scores'])
+                bbox = person_boxes[i]
                 
-                # 크롭 이미지 좌표를 원본 이미지 좌표로 변환
-                if i < len(person_boxes):
-                    bbox = person_boxes[i]
-                    # 간단한 스케일링 (실제로는 아핀 변환 역변환 필요)
-                    bbox_w = bbox[2] - bbox[0]
-                    bbox_h = bbox[3] - bbox[1]
-                    
-                    for j, (kpt, score) in enumerate(zip(keypoints, scores)):
-                        if score > 0.3:
-                            # 크롭 좌표(288x384)를 원본 바운딩박스 좌표로 변환
-                            x = int(bbox[0] + (kpt[0] / 288.0) * bbox_w)
-                            y = int(bbox[1] + (kpt[1] / 384.0) * bbox_h)
+                # 크롭 좌표를 원본 이미지 좌표로 정확히 변환
+                original_keypoints = self.transform_keypoints_to_original(keypoints, bbox)
+                
+                for j, (orig_kpt, score) in enumerate(zip(original_keypoints, scores)):
+                    if score > 0.3:
+                        x, y = int(orig_kpt[0]), int(orig_kpt[1])
+                        
+                        # 이미지 범위 내에 있는 키포인트만 그리기
+                        if 0 <= x < vis_image.shape[1] and 0 <= y < vis_image.shape[0]:
+                            if score > 0.8:
+                                kpt_color = (0, 255, 0)    # 높은 신뢰도: 초록
+                            elif score > 0.6:
+                                kpt_color = (0, 255, 255)  # 중간 신뢰도: 노랑
+                            else:
+                                kpt_color = (0, 0, 255)    # 낮은 신뢰도: 빨강
                             
-                            if 0 <= x < vis_image.shape[1] and 0 <= y < vis_image.shape[0]:
-                                if score > 0.8:
-                                    kpt_color = (0, 255, 0)    # 높은 신뢰도: 초록
-                                elif score > 0.6:
-                                    kpt_color = (0, 255, 255)  # 중간 신뢰도: 노랑
-                                else:
-                                    kpt_color = (0, 0, 255)    # 낮은 신뢰도: 빨강
-                                
-                                cv2.circle(vis_image, (x, y), 3, kpt_color, -1)
+                            cv2.circle(vis_image, (x, y), 3, kpt_color, -1)
+                            
+                            # 키포인트 인덱스 표시 (디버깅용, 필요시)
+                            if j < 17:  # body keypoints만
+                                cv2.putText(vis_image, str(j), (x+5, y), 
+                                          cv2.FONT_HERSHEY_SIMPLEX, 0.3, kpt_color, 1)
         
         # 성능 정보 표시
         if self.fps_history:
@@ -342,7 +386,7 @@ class EdgeServer:
                    (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv2.putText(vis_image, f"Pose Server: {self.pose_server_url.split('://')[-1]}", 
                    (10, 85), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
-        cv2.putText(vis_image, f"Detections: {len(person_boxes)}", 
+        cv2.putText(vis_image, f"Detections: {'1 person' if person_boxes else 'No person'}", 
                    (10, 110), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
         
         return vis_image
@@ -368,17 +412,18 @@ class EdgeServer:
                     
                     start_time = time.time()
                     
-                    # 1. YOLO 검출
+                    # 1. YOLO 검출 (가장 높은 신뢰도 박스 1개만)
                     person_boxes = self.detector.detect_persons(frame)
                     
-                    # 2. 각 사람에 대해 크롭 + 포즈 서버로 전송
+                    # 2. 가장 신뢰도 높은 사람에 대해 크롭 + 포즈 서버로 전송
                     pose_results = []
-                    for i, bbox in enumerate(person_boxes):
+                    if person_boxes:  # 검출된 박스가 있으면
+                        bbox = person_boxes[0]  # 가장 높은 신뢰도 박스
                         crop_image = self.detector.crop_person_image_rtmw(frame, bbox)
                         if crop_image is not None:
                             # 포즈 서버로 전송
                             pose_result = self.send_crop_to_pose_server(
-                                crop_image, bbox, self.frame_count * 1000 + i
+                                crop_image, bbox, self.frame_count
                             )
                             pose_results.append(pose_result)
                         else:
@@ -413,8 +458,9 @@ class EdgeServer:
                 # 주기적 통계 출력
                 if self.frame_count % 60 == 0 and self.frame_count > 0:
                     avg_fps = np.mean(self.fps_history) if self.fps_history else 0
+                    detection_status = "검출됨" if person_boxes else "미검출"
                     print(f"📊 프레임 {self.frame_count}: {avg_fps:.1f}fps, "
-                          f"{len(person_boxes)}명 검출")
+                          f"사람 {detection_status}")
                     
         except KeyboardInterrupt:
             print("\n⏹️ 사용자가 엣지 서버를 중단했습니다.")
