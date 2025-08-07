@@ -7,3 +7,5 @@
 \mosu\web-main\app에서
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
+실행 웹페이지
+http://localhost:8000/webcam/webcam.html
