@@ -157,4 +157,25 @@ class WebcamCapture:
                         )
                         cv2.imwrite(crop_path, crop_img)
                         count += 1
+
+                    # --- 크롭 이미지 서버로 전송 (bbox 포함) ---
+                    # try:
+                    #     with open(crop_path, "rb") as f:
+                    #         files = {'image': (crop_filename, f, 'image/jpeg')}
+                    #         data = {
+                    #             'bbox': json.dumps(bbox),  # bbox 정보를 문자열로 전송
+                    #         }
+                    #         resp = requests.post(
+                    #             "http://192.168.100.13/estimate_pose",
+                    #             files=files,
+                    #             data=data,
+                    #             timeout=10
+                    #         )
+                    #     if resp.status_code == 200:
+                    #         send_count += 1
+                    #     else:
+                    #         print(f"서버 응답 오류: {resp.status_code} {resp.text}")
+                    # except Exception as e:
+                    #     print(f"서버 전송 실패: {crop_path} - {e}")
+                        
             return f"YOLO 크롭 완료: {count}개 이미지 저장 ({crop_folder})"
