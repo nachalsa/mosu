@@ -33,19 +33,19 @@ async def capture_image():
 
 @router.post("/start_recording")
 async def start_recording():
-    message = webcam.start_recording()
+    message = webcam.start_capture_images() #webcam.start_recording()
     return {"message": message}
 
 @router.post("/stop_recording")
 async def stop_recording():
-    message = webcam.stop_recording()
+    message = webcam.stop_capture_images() # webcam.stop_recording()
     return {"message": message}
 
 @router.get("/status")
 async def get_status():
     return {
         "camera_initialized": webcam.cap is not None and webcam.cap.isOpened(),
-        "recording": webcam.recording,
+        "recording": webcam.capturing_images, #webcam.recording,
         "video_count": webcam.video_count,
         "image_count": webcam.image_count
     }

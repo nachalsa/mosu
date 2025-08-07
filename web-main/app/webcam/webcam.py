@@ -1,12 +1,16 @@
 import cv2
 import os
 import time
+import datetime
 
 class WebcamCapture:
     def __init__(self):
         self.cap = None
         self.recording = False
         self.video_writer = None
+        self.capturing_images = False
+        self.capture_folder = None
+        self.capture_image_count = 0
         self.video_folder = "./captured_videos"
         self.image_folder = "./captured_images"
         self.video_count = 0
@@ -37,6 +41,26 @@ class WebcamCapture:
             self.video_writer.release()
             self.video_writer = None
     
+    def start_capture_images(self):
+        """이미지 연속 저장 시작"""
+        if not self.capturing_images:
+            now = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+            self.capture_folder = os.path.join("captured_datas", now)
+            os.makedirs(self.capture_folder, exist_ok=True)
+            self.capturing_images = True
+            self.capture_image_count = 0
+            return f"이미지 캡처 시작: {self.capture_folder}"
+        return "이미 이미지 캡처 중입니다"
+
+    def stop_capture_images(self):
+        """이미지 연속 저장 종료"""
+        if self.capturing_images:
+            self.capturing_images = False
+            folder = self.capture_folder
+            self.capture_folder = None
+            return f"이미지 캡처 종료: {folder}"
+        return "이미지 캡처 중이 아닙니다"
+
     def capture_frame(self):
         """프레임 캡처"""
         if not self.initialize_camera():
@@ -47,6 +71,13 @@ class WebcamCapture:
             # 녹화 중이면 비디오에 저장
             if self.recording and self.video_writer:
                 self.video_writer.write(frame)
+            # 이미지 연속 저장 중이면 파일로 저장
+            if self.capturing_images and self.capture_folder:
+                self.capture_image_count += 1
+                image_path = os.path.join(
+                    self.capture_folder, f"img_{self.capture_image_count:04d}.jpg"
+                )
+                cv2.imwrite(image_path, frame)
             return frame
         return None
     
