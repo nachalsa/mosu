@@ -6,6 +6,103 @@ from yolo.edge_yolo_detector import EdgeYOLODetector
 import glob
 import requests
 import json
+import uuid  # 추가된 import
+import numpy as np
+from typing import List, Tuple
+
+def bbox_xyxy2cs(bbox: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """bbox(x1,y1,x2,y2) -> center, scale 변환"""
+    x1, y1, x2, y2 = bbox
+    center = np.array([(x1 + x2) * 0.5, (y1 + y2) * 0.5], dtype=np.float32)
+    box_w = x2 - x1
+    box_h = y2 - y1
+    scale = np.array([box_w, box_h], dtype=np.float32)
+    return center, scale
+
+def fix_aspect_ratio(scale: np.ndarray, aspect_ratio: float) -> np.ndarray:
+    """scale의 비율을 고정 (width 기준)"""
+    w, h = scale
+    if w > h * aspect_ratio:
+        h = w / aspect_ratio
+    else:
+        w = h * aspect_ratio
+    return np.array([w, h], dtype=np.float32)
+
+def get_warp_matrix(center, scale, rot, output_size):
+    """아핀 변환 행렬 생성"""
+    src_w, src_h = scale
+    src_dir = get_dir([0, src_h * -0.5], rot)
+    dst_w, dst_h = output_size
+    dst_dir = np.array([0, dst_h * -0.5])
+
+    src = np.zeros((3, 2), dtype=np.float32)
+    dst = np.zeros((3, 2), dtype=np.float32)
+
+    src[0, :] = center
+    src[1, :] = center + src_dir
+    src[2:] = get_third_point(src[0, :], src[1, :])
+
+    dst[0, :] = [dst_w * 0.5, dst_h * 0.5]
+    dst[1, :] = dst[0, :] + dst_dir
+    dst[2:] = get_third_point(dst[0, :], dst[1, :])
+
+    trans = cv2.getAffineTransform(src, dst)
+    return trans
+
+def get_dir(src_point, rot_rad):
+    """회전된 방향 벡터 계산"""
+    sn, cs = np.sin(rot_rad), np.cos(rot_rad)
+    src_result = [src_point[0] * cs - src_point[1] * sn,
+                  src_point[0] * sn + src_point[1] * cs]
+    return np.array(src_result)
+
+def get_third_point(a, b):
+    """세 번째 점 계산"""
+    direct = a - b
+    return b + np.array([-direct[1], direct[0]], dtype=np.float32)
+
+def transform_keypoints_to_original(keypoints: np.ndarray, bbox: List[float]) -> np.ndarray:
+    """크롭 좌표(288x384)의 키포인트를 원본 이미지 좌표로 변환"""
+    try:
+        # RTMW와 동일한 변환 과정을 역변환
+        input_width, input_height = 288, 384
+        
+        # 1. bbox를 center, scale로 변환 (crop 시와 동일)
+        bbox_array = np.array(bbox, dtype=np.float32)
+        center, scale = bbox_xyxy2cs(bbox_array)
+        
+        # 2. aspect ratio 고정 (crop 시와 동일)
+        aspect_ratio = input_width / input_height  # 0.75
+        scale = fix_aspect_ratio(scale, aspect_ratio)
+        
+        # 3. 아핀 변환 매트릭스 계산 (crop 시와 동일)
+        warp_mat = get_warp_matrix(
+            center=center,
+            scale=scale,
+            rot=0.0,
+            output_size=(input_width, input_height)
+        )
+        
+        # 4. 역변환 매트릭스 계산
+        inv_warp_mat = cv2.invertAffineTransform(warp_mat)
+        
+        # 5. 키포인트를 homogeneous coordinates로 변환
+        num_keypoints = keypoints.shape[0]
+        kpts_homo = np.ones((num_keypoints, 3))
+        kpts_homo[:, :2] = keypoints[:, :2]
+        
+        # 6. 역변환 적용
+        original_keypoints = np.zeros_like(keypoints)
+        for i in range(num_keypoints):
+            transformed_pt = inv_warp_mat @ kpts_homo[i]
+            original_keypoints[i, 0] = transformed_pt[0]
+            original_keypoints[i, 1] = transformed_pt[1]
+        
+        return original_keypoints
+    
+    except Exception as e:
+        print(f"⚠️ 키포인트 변환 실패: {e}")
+        return keypoints  # 실패시 원본 반환
 
 class WebcamCapture:
     def __init__(self):
@@ -154,6 +251,7 @@ class WebcamCapture:
                 continue
             person_boxes = self.yolo.detect_persons(frame)
             for i, bbox in enumerate(person_boxes):
+                bbox = person_boxes[0]
                 crop_img = self.yolo.crop_person_image_rtmw(frame, bbox)
                 if crop_img is not None:
                     crop_path = os.path.join(
@@ -178,7 +276,24 @@ class WebcamCapture:
                             )
                         if resp.status_code == 200:
                             send_count += 1
-                            print(f"서버로 전송 성공: {resp.text}")
+                            try:
+                                response_json = resp.json()
+                                keypoints = np.array(response_json.get("keypoints", []), dtype=np.float32)
+
+                                if keypoints.ndim == 2 and keypoints.shape[1] >= 2:
+                                    # 원본 이미지 좌표로 복원
+                                    original_keypoints = transform_keypoints_to_original(keypoints, bbox)
+
+                                    # 복원된 키포인트를 JSON에 추가
+                                    response_json["original_keypoints"] = original_keypoints.tolist()
+
+                                json_filename = os.path.splitext(crop_filename)[0] + f"_pose_{uuid.uuid4().hex[:8]}.json"
+                                json_save_path = os.path.join(crop_folder, json_filename)
+                                with open(json_save_path, 'w', encoding='utf-8') as f_json:
+                                    json.dump(response_json, f_json, indent=2, ensure_ascii=False)
+                                print(f"✅ 서버 응답 + 키포인트 변환 저장 완료: {json_save_path}")
+                            except Exception as e:
+                                print(f"❌ 응답 JSON 파싱 실패: {e}")
                         else:
                             print(f"서버 응답 오류: {resp.status_code} {resp.text}")
                     except Exception as e:

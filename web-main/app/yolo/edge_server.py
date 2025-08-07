@@ -9,6 +9,58 @@ from pathlib import Path
 import logging
 from collections import deque
 
+def bbox_xyxy2cs(bbox: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """bbox(x1,y1,x2,y2) -> center, scale 변환"""
+    x1, y1, x2, y2 = bbox
+    center = np.array([(x1 + x2) * 0.5, (y1 + y2) * 0.5], dtype=np.float32)
+    box_w = x2 - x1
+    box_h = y2 - y1
+    scale = np.array([box_w, box_h], dtype=np.float32)
+    return center, scale
+
+def fix_aspect_ratio(scale: np.ndarray, aspect_ratio: float) -> np.ndarray:
+    """scale의 비율을 고정 (width 기준)"""
+    w, h = scale
+    if w > h * aspect_ratio:
+        h = w / aspect_ratio
+    else:
+        w = h * aspect_ratio
+    return np.array([w, h], dtype=np.float32)
+
+def get_warp_matrix(center, scale, rot, output_size):
+    """아핀 변환 행렬 생성"""
+    src_w, src_h = scale
+    src_dir = get_dir([0, src_h * -0.5], rot)
+    dst_w, dst_h = output_size
+    dst_dir = np.array([0, dst_h * -0.5])
+
+    src = np.zeros((3, 2), dtype=np.float32)
+    dst = np.zeros((3, 2), dtype=np.float32)
+
+    src[0, :] = center
+    src[1, :] = center + src_dir
+    src[2:] = get_third_point(src[0, :], src[1, :])
+
+    dst[0, :] = [dst_w * 0.5, dst_h * 0.5]
+    dst[1, :] = dst[0, :] + dst_dir
+    dst[2:] = get_third_point(dst[0, :], dst[1, :])
+
+    trans = cv2.getAffineTransform(src, dst)
+    return trans
+
+def get_dir(src_point, rot_rad):
+    """회전된 방향 벡터 계산"""
+    sn, cs = np.sin(rot_rad), np.cos(rot_rad)
+    src_result = [src_point[0] * cs - src_point[1] * sn,
+                  src_point[0] * sn + src_point[1] * cs]
+    return np.array(src_result)
+
+def get_third_point(a, b):
+    """세 번째 점 계산"""
+    direct = a - b
+    return b + np.array([-direct[1], direct[0]], dtype=np.float32)
+
+
 class EdgeServer:
     """엣지 서버 - 웹캠 캡처 + YOLO 검출 + 크롭 + 전송"""
     
@@ -99,6 +151,49 @@ class EdgeServer:
         except Exception as e:
             print(f"⚠️ 이미지 전송 실패: {e}")
             return None
+        
+    def transform_keypoints_to_original(self, keypoints: np.ndarray, bbox: List[float]) -> np.ndarray:
+        """크롭 좌표(288x384)의 키포인트를 원본 이미지 좌표로 변환"""
+        try:
+            # RTMW와 동일한 변환 과정을 역변환
+            input_width, input_height = 288, 384
+            
+            # 1. bbox를 center, scale로 변환 (crop 시와 동일)
+            bbox_array = np.array(bbox, dtype=np.float32)
+            center, scale = bbox_xyxy2cs(bbox_array)
+            
+            # 2. aspect ratio 고정 (crop 시와 동일)
+            aspect_ratio = input_width / input_height  # 0.75
+            scale = fix_aspect_ratio(scale, aspect_ratio)
+            
+            # 3. 아핀 변환 매트릭스 계산 (crop 시와 동일)
+            warp_mat = get_warp_matrix(
+                center=center,
+                scale=scale,
+                rot=0.0,
+                output_size=(input_width, input_height)
+            )
+            
+            # 4. 역변환 매트릭스 계산
+            inv_warp_mat = cv2.invertAffineTransform(warp_mat)
+            
+            # 5. 키포인트를 homogeneous coordinates로 변환
+            num_keypoints = keypoints.shape[0]
+            kpts_homo = np.ones((num_keypoints, 3))
+            kpts_homo[:, :2] = keypoints[:, :2]
+            
+            # 6. 역변환 적용
+            original_keypoints = np.zeros_like(keypoints)
+            for i in range(num_keypoints):
+                transformed_pt = inv_warp_mat @ kpts_homo[i]
+                original_keypoints[i, 0] = transformed_pt[0]
+                original_keypoints[i, 1] = transformed_pt[1]
+            
+            return original_keypoints
+        
+        except Exception as e:
+            print(f"⚠️ 키포인트 변환 실패: {e}")
+            return keypoints  # 실패시 원본 반환
     
     def visualize_results(self, image: np.ndarray, person_boxes: List[List[float]], 
                          pose_results: List[dict]) -> np.ndarray:
@@ -119,28 +214,23 @@ class EdgeServer:
                 keypoints = np.array(pose_result['keypoints'])
                 scores = np.array(pose_result['scores'])
                 
-                # 크롭 이미지 좌표를 원본 이미지 좌표로 변환
-                if i < len(person_boxes):
-                    bbox = person_boxes[i]
-                    # 간단한 스케일링 (실제로는 아핀 변환 역변환 필요)
-                    bbox_w = bbox[2] - bbox[0]
-                    bbox_h = bbox[3] - bbox[1]
-                    
-                    for j, (kpt, score) in enumerate(zip(keypoints, scores)):
-                        if score > 0.3:
-                            # 크롭 좌표(288x384)를 원본 바운딩박스 좌표로 변환
-                            x = int(bbox[0] + (kpt[0] / 288.0) * bbox_w)
-                            y = int(bbox[1] + (kpt[1] / 384.0) * bbox_h)
+                original_keypoints = self.transform_keypoints_to_original(keypoints, bbox)
+                
+                for j, (kpt, score) in enumerate(zip(keypoints, scores)):
+                    if score > 0.3:
+                        # 크롭 좌표(288x384)를 원본 바운딩박스 좌표로 변환
+                        x = int(bbox[0] + (kpt[0] / 288.0) * bbox_w)
+                        y = int(bbox[1] + (kpt[1] / 384.0) * bbox_h)
+                        
+                        if 0 <= x < vis_image.shape[1] and 0 <= y < vis_image.shape[0]:
+                            if score > 0.8:
+                                kpt_color = (0, 255, 0)    # 높은 신뢰도: 초록
+                            elif score > 0.6:
+                                kpt_color = (0, 255, 255)  # 중간 신뢰도: 노랑
+                            else:
+                                kpt_color = (0, 0, 255)    # 낮은 신뢰도: 빨강
                             
-                            if 0 <= x < vis_image.shape[1] and 0 <= y < vis_image.shape[0]:
-                                if score > 0.8:
-                                    kpt_color = (0, 255, 0)    # 높은 신뢰도: 초록
-                                elif score > 0.6:
-                                    kpt_color = (0, 255, 255)  # 중간 신뢰도: 노랑
-                                else:
-                                    kpt_color = (0, 0, 255)    # 낮은 신뢰도: 빨강
-                                
-                                cv2.circle(vis_image, (x, y), 3, kpt_color, -1)
+                            cv2.circle(vis_image, (x, y), 3, kpt_color, -1)
         
         # 성능 정보 표시
         if self.fps_history:
@@ -184,6 +274,7 @@ class EdgeServer:
                     # 2. 각 사람에 대해 크롭 + 포즈 서버로 전송
                     pose_results = []
                     for i, bbox in enumerate(person_boxes):
+                        bbox = person_boxes[0]
                         crop_image = self.detector.crop_person_image_rtmw(frame, bbox)
                         if crop_image is not None:
                             # 포즈 서버로 전송
