@@ -4,6 +4,8 @@ import time
 import datetime
 from yolo.edge_yolo_detector import EdgeYOLODetector
 import glob
+import requests
+import json
 
 class WebcamCapture:
     def __init__(self):
@@ -132,50 +134,55 @@ class WebcamCapture:
             time.sleep(0.03)  # 약 30fps
 
     def process_latest_folder_with_yolo(self):
-            """가장 최근 폴더의 이미지를 YOLO로 크롭"""
-            base_dir = "captured_datas"
-            if not os.path.exists(base_dir):
-                return "저장된 폴더가 없습니다."
-            folders = [os.path.join(base_dir, d) for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
-            if not folders:
-                return "저장된 폴더가 없습니다."
-            latest_folder = max(folders, key=os.path.getmtime)
-            crop_folder = latest_folder + "-crop"
-            os.makedirs(crop_folder, exist_ok=True)
-            images = sorted(glob.glob(os.path.join(latest_folder, "*.jpg")))
-            count = 0
-            for img_path in images:
-                frame = cv2.imread(img_path)
-                if frame is None:
-                    continue
-                person_boxes = self.yolo.detect_persons(frame)
-                for i, bbox in enumerate(person_boxes):
-                    crop_img = self.yolo.crop_person_image_rtmw(frame, bbox)
-                    if crop_img is not None:
-                        crop_path = os.path.join(
-                            crop_folder, f"{os.path.splitext(os.path.basename(img_path))[0]}_{i+1}.jpg"
-                        )
-                        cv2.imwrite(crop_path, crop_img)
-                        count += 1
+        """가장 최근 폴더의 이미지를 YOLO로 크롭"""
+        base_dir = "captured_datas"
+        if not os.path.exists(base_dir):
+            return "저장된 폴더가 없습니다."
+        folders = [os.path.join(base_dir, d) for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
+        if not folders:
+            return "저장된 폴더가 없습니다."
+        latest_folder = max(folders, key=os.path.getmtime)
+        crop_folder = latest_folder + "-crop"
+        os.makedirs(crop_folder, exist_ok=True)
+        images = sorted(glob.glob(os.path.join(latest_folder, "*.jpg")))
+        count = 0
+        send_count = 0  # 전송 성공 카운트 추가
+        
+        for img_path in images:
+            frame = cv2.imread(img_path)
+            if frame is None:
+                continue
+            person_boxes = self.yolo.detect_persons(frame)
+            for i, bbox in enumerate(person_boxes):
+                crop_img = self.yolo.crop_person_image_rtmw(frame, bbox)
+                if crop_img is not None:
+                    crop_path = os.path.join(
+                        crop_folder, f"{os.path.splitext(os.path.basename(img_path))[0]}_{i+1}.jpg"
+                    )
+                    cv2.imwrite(crop_path, crop_img)
+                    count += 1
 
                     # --- 크롭 이미지 서버로 전송 (bbox 포함) ---
-                    # try:
-                    #     with open(crop_path, "rb") as f:
-                    #         files = {'image': (crop_filename, f, 'image/jpeg')}
-                    #         data = {
-                    #             'bbox': json.dumps(bbox),  # bbox 정보를 문자열로 전송
-                    #         }
-                    #         resp = requests.post(
-                    #             "http://192.168.100.13/estimate_pose",
-                    #             files=files,
-                    #             data=data,
-                    #             timeout=10
-                    #         )
-                    #     if resp.status_code == 200:
-                    #         send_count += 1
-                    #     else:
-                    #         print(f"서버 응답 오류: {resp.status_code} {resp.text}")
-                    # except Exception as e:
-                    #     print(f"서버 전송 실패: {crop_path} - {e}")
-                        
-            return f"YOLO 크롭 완료: {count}개 이미지 저장 ({crop_folder})"
+                    try:
+                        crop_filename = os.path.basename(crop_path)  # crop_filename 정의 추가
+                        with open(crop_path, "rb") as f:
+                            files = {'image': (crop_filename, f, 'image/jpeg')}
+                            data = {
+                                'bbox': json.dumps(bbox.tolist() if hasattr(bbox, 'tolist') else bbox),  # bbox를 리스트로 변환
+                            }
+                            resp = requests.post(
+                                "http://192.168.100.135:5000/estimate_pose",
+                                files=files,
+                                data=data,
+                                timeout=10
+                            )
+                        if resp.status_code == 200:
+                            send_count += 1
+                            print(f"서버로 전송 성공: {resp.text}")
+                        else:
+                            print(f"서버 응답 오류: {resp.status_code} {resp.text}")
+                    except Exception as e:
+                        print(f"서버 전송 실패: {crop_path} - {e}")
+        
+        # return 문을 모든 루프 완료 후로 이동하고 send_count 포함
+        return f"YOLO 크롭 완료: {count}개 이미지 저장, {send_count}개 서버 전송 성공 ({crop_folder})"
