@@ -6,6 +6,7 @@ from yolo.edge_yolo_detector import EdgeYOLODetector
 import glob
 import requests
 import json
+import numpy as np
 
 class WebcamCapture:
     def __init__(self):
@@ -29,7 +30,7 @@ class WebcamCapture:
         # 폴더 생성
         os.makedirs(self.video_folder, exist_ok=True)
         os.makedirs(self.image_folder, exist_ok=True)
-        
+
     def initialize_camera(self):
         """카메라 초기화"""
         if self.cap is None or not self.cap.isOpened():
@@ -142,8 +143,12 @@ class WebcamCapture:
         if not folders:
             return "저장된 폴더가 없습니다."
         latest_folder = max(folders, key=os.path.getmtime)
-        crop_folder = latest_folder + "-crop"
+
+        # crop_folder 하위에 latest_folder 이름으로 폴더 생성
+        latest_folder_name = os.path.basename(latest_folder)
+        crop_folder = os.path.join("captured_cropped", latest_folder_name)
         os.makedirs(crop_folder, exist_ok=True)
+        
         images = sorted(glob.glob(os.path.join(latest_folder, "*.jpg")))
         count = 0
         send_count = 0  # 전송 성공 카운트 추가
@@ -152,37 +157,48 @@ class WebcamCapture:
             frame = cv2.imread(img_path)
             if frame is None:
                 continue
+            st = time.time()
             person_boxes = self.yolo.detect_persons(frame)
-            for i, bbox in enumerate(person_boxes):
+            et = time.time()
+            print(f"YOLO 처리 시간: {et - st:.5f}초, 이미지: {img_path}")
+            if person_boxes:
+                # 각 bbox: [x1, y1, x2, y2]
+                areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in person_boxes]
+                max_idx = int(np.argmax(areas))
+                bbox = person_boxes[max_idx]
                 crop_img = self.yolo.crop_person_image_rtmw(frame, bbox)
                 if crop_img is not None:
-                    crop_path = os.path.join(
-                        crop_folder, f"{os.path.splitext(os.path.basename(img_path))[0]}_{i+1}.jpg"
-                    )
+                    # 디버그용 크롭 이미지 파일 저장
+                    crop_filename = os.path.basename(img_path).replace('.jpg', '_crop.jpg')
+                    crop_path = os.path.join(crop_folder, crop_filename)
                     cv2.imwrite(crop_path, crop_img)
-                    count += 1
+                    
+                    # 파일로 저장하지 않고 메모리에서 JPEG 인코딩
+                    ret, buffer = cv2.imencode('.jpg', crop_img)
+                    if not ret:
+                        print(f"이미지 인코딩 실패: {img_path}")
+                        continue
+                    crop_bytes = buffer.tobytes()
 
                     # --- 크롭 이미지 서버로 전송 (bbox 포함) ---
                     try:
-                        crop_filename = os.path.basename(crop_path)  # crop_filename 정의 추가
-                        with open(crop_path, "rb") as f:
-                            files = {'image': (crop_filename, f, 'image/jpeg')}
-                            data = {
-                                'bbox': json.dumps(bbox.tolist() if hasattr(bbox, 'tolist') else bbox),  # bbox를 리스트로 변환
-                            }
-                            resp = requests.post(
-                                "http://192.168.100.135:5000/estimate_pose",
-                                files=files,
-                                data=data,
-                                timeout=10
-                            )
+                        files = {'image': (os.path.basename(img_path), crop_bytes, 'image/jpeg')}
+                        data = {
+                            'bbox': json.dumps(bbox.tolist() if hasattr(bbox, 'tolist') else bbox),
+                        }
+                        resp = requests.post(
+                            "http://192.168.100.135:5000/estimate_pose",
+                            files=files,
+                            data=data,
+                            timeout=10
+                        )
                         if resp.status_code == 200:
                             send_count += 1
-                            print(f"서버로 전송 성공: {resp.text}")
+                            print(f"서버로 전송 성공: {send_count} , {img_path} ")
                         else:
                             print(f"서버 응답 오류: {resp.status_code} {resp.text}")
                     except Exception as e:
-                        print(f"서버 전송 실패: {crop_path} - {e}")
+                        print(f"서버 전송 실패: {crop_filename} - {e}")
         
         # return 문을 모든 루프 완료 후로 이동하고 send_count 포함
-        return f"YOLO 크롭 완료: {count}개 이미지 저장, {send_count}개 서버 전송 성공 ({crop_folder})"
+        return f"YOLO 크롭 완료: {count}개 이미지 저장, {send_count}개 서버 전송 성공"

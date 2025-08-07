@@ -26,13 +26,6 @@ async def video_feed():
         media_type="multipart/x-mixed-replace; boundary=frame"
     )
 
-@router.post("/capture_image")
-async def capture_image():
-    image_path = webcam.save_image()
-    if image_path:
-        return {"message": f"이미지 저장됨: {image_path}"}
-    return {"error": "이미지 캡처 실패"}
-
 @router.post("/start_recording")
 async def start_recording():
     message = webcam.start_capture_images() #webcam.start_recording()

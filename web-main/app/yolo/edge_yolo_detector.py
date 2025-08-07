@@ -16,11 +16,11 @@ class EdgeYOLODetector:
     """엣지 디바이스용 YOLO 검출기"""
     
     def __init__(self, 
-                 yolo_model: str = "yolo11l.pt",
-                 conf_thresh: float = 0.4,
+                 yolo_model: str = "yolov8n.pt",
+                 conf_thresh: float = 0.6,
                  iou_thresh: float = 0.6,
-                 max_det: int = 50,
-                 img_size: int = 832):
+                 max_det: int = 1,
+                 img_size: int = 320):
         
         if not YOLO_AVAILABLE:
             raise ImportError("ultralytics가 필요합니다: pip install ultralytics")
@@ -36,14 +36,13 @@ class EdgeYOLODetector:
         print(f"✅ YOLO11L 모델 로딩 완료")
     
     def detect_persons(self, image: np.ndarray) -> List[List[float]]:
-        """사람 검출"""
         try:
             results = self.model(
                 image,
                 conf=self.conf_thresh,
                 iou=self.iou_thresh,
-                max_det=self.max_det,
-                classes=[0],  # 사람 클래스만
+                max_det=1,  # 50 → 1 (가장 큰 것 1개만)
+                classes=[0],
                 verbose=False,
                 imgsz=self.img_size
             )
@@ -53,27 +52,15 @@ class EdgeYOLODetector:
                 boxes = result.boxes
                 if boxes is not None and len(boxes) > 0:
                     person_coords = boxes.xyxy
-                    person_confs = boxes.conf
                     
-                    # 신뢰도 재필터링
-                    conf_mask = person_confs >= self.conf_thresh
-                    if conf_mask.any():
-                        filtered_boxes = person_coords[conf_mask]
-                        filtered_confs = person_confs[conf_mask]
-                        
-                        # numpy 변환
-                        if hasattr(filtered_boxes, 'cpu'):
-                            filtered_boxes = filtered_boxes.cpu().numpy()
-                            filtered_confs = filtered_confs.cpu().numpy()
-                        
-                        # 신뢰도순 정렬
-                        sorted_indices = np.argsort(filtered_confs)[::-1]
-                        sorted_boxes = filtered_boxes[sorted_indices]
-                        
-                        person_boxes.extend(sorted_boxes.tolist())
+                    # numpy 변환만
+                    if hasattr(person_coords, 'cpu'):
+                        person_coords = person_coords.cpu().numpy()
+                    
+                    person_boxes.extend(person_coords.tolist())
             
             return person_boxes
-            
+        
         except Exception as e:
             print(f"❌ YOLO 검출 실패: {e}")
             return []
