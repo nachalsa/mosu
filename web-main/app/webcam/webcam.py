@@ -17,6 +17,7 @@ class WebcamCapture:
         self.realtime_translate = False
         self.realtime_fps = 0
         self.capture_folder = None
+        self.capture_folder_name = "captured_datas"
         self.capture_image_count = 0
         self.video_folder = "./captured_videos"
         self.image_folder = "./captured_images"
@@ -26,6 +27,7 @@ class WebcamCapture:
         self.h = 480
         self.fps = 10
         self.last_server_result = ""
+        self.mmpose_server_ip = "192.168.100.135:5000"
         
         self.yolo = EdgeYOLODetector()  # YOLO 인스턴스 추가
         self.crop_folder = None
@@ -73,7 +75,7 @@ class WebcamCapture:
         """이미지 연속 저장 시작"""
         if not self.capturing_images:
             now = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
-            self.capture_folder = os.path.join("captured_datas", now)
+            self.capture_folder = os.path.join(self.capture_folder_name, now)
             os.makedirs(self.capture_folder, exist_ok=True)
             self.capturing_images = True
             self.capture_image_count = 0
@@ -107,7 +109,12 @@ class WebcamCapture:
                 )
                 cv2.imwrite(image_path, frame)
             elif self.realtime_translate:
-                self.process_frame_with_yolo(frame);
+                self.realtime_fps += 1 
+                crop_img, bbox = self.process_frame_with_yolo(frame);
+                if crop_img is not None:
+                        ret, buffer = cv2.imencode('.jpg', crop_img)
+                        if ret:
+                            self.send_pose_server(str(self.realtime_fps) + '.jpg', buffer.tobytes(), bbox)
 
             return frame
         return None
@@ -165,8 +172,6 @@ class WebcamCapture:
                 time.sleep(sleep_time)
 
     def process_frame_with_yolo(self, frame):
-        self.realtime_fps += 1 
-        print(f"self.realtime_fps : {self.realtime_fps}")
         s = time.time()
         person_boxes = self.yolo.detect_persons(frame)
         print(f"YOLO 처리 시간: {time.time() - s:.5f}초")
@@ -174,96 +179,64 @@ class WebcamCapture:
             areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in person_boxes]
             max_idx = int(np.argmax(areas))
             bbox = person_boxes[max_idx]
-            crop_img = self.yolo.crop_person_image_rtmw(frame, bbox)
-            if crop_img is not None:
-                ret, buffer = cv2.imencode('.jpg', crop_img)
-                if ret:
-                    crop_bytes = buffer.tobytes()
-                    try:
-                        print(f"call server ")
+            ci = self.yolo.crop_person_image_rtmw(frame, bbox)
+            return ci, bbox 
+        return None, None
 
-                        files = {'image': (str(self.realtime_fps) + '.jpg', crop_bytes, 'image/jpeg')}
-                        data = {'bbox': json.dumps(bbox.tolist() if hasattr(bbox, 'tolist') else bbox)}
-                        resp = requests.post(
-                            "http://192.168.100.135:5000/estimate_pose",
-                            files=files,
-                            data=data,
-                            timeout=10
-                        )
-                        # 서버 응답을 전역변수 등에 저장 (예시)
-                        self.last_server_result = str(self.realtime_fps) + "-서버 결과"  # 수정
-                        if resp.status_code == 200:
-                            print("서버 전송 성공")
-                        else:
-                            print("서버 전송 실패")
-                    except Exception as e:
-                        print(f"실시간 서버 전송 실패: {e}")
+
+    def send_pose_server(self, filename, crop_bytes, bbox):
+        # todo 나머지 완료되거나 서버 확정 시 수정해 주세요.
+        try:
+            files = {'image': (filename, crop_bytes, 'image/jpeg')}
+            data = {'bbox': json.dumps(bbox.tolist() if hasattr(bbox, 'tolist') else bbox)}
+            resp = requests.post(
+                f"http://{self.mmpose_server_ip}/estimate_pose",
+                files=files,
+                data=data,
+                timeout=10
+            )
+            # 서버 응답을 전역변수 등에 저장 (예시)
+            self.last_server_result = str(self.realtime_fps) + "-서버 결과"  # 수정
+            if resp.status_code == 200:
+                print("서버 전송 성공")
+            else:
+                print("서버 전송 실패")
+        except Exception as e:
+            print(f"실시간 서버 전송 실패: {e}")
 
     def process_latest_folder_with_yolo(self):
         """가장 최근 폴더의 이미지를 YOLO로 크롭"""
-        base_dir = "captured_datas"
-        if not os.path.exists(base_dir):
-            return "저장된 폴더가 없습니다."
+        #가장 최근 폴더 가져오기
+        base_dir = self.capture_folder_name
         folders = [os.path.join(base_dir, d) for d in os.listdir(base_dir) if os.path.isdir(os.path.join(base_dir, d))]
         if not folders:
             return "저장된 폴더가 없습니다."
         latest_folder = max(folders, key=os.path.getmtime)
+        #디버그 크롭용 폴더 생성
+        crop_folder = self.create_crop_folder(latest_folder)
 
-        # crop_folder 하위에 latest_folder 이름으로 폴더 생성
-        latest_folder_name = os.path.basename(latest_folder)
-        crop_folder = os.path.join("captured_cropped", latest_folder_name)
-        os.makedirs(crop_folder, exist_ok=True)
-        
         images = sorted(glob.glob(os.path.join(latest_folder, "*.jpg")))
-        count = 0
-        send_count = 0  # 전송 성공 카운트 추가
         
         for img_path in images:
             frame = cv2.imread(img_path)
             if frame is None:
                 continue
-            st = time.time()
-            person_boxes = self.yolo.detect_persons(frame)
-            et = time.time()
-            print(f"YOLO 처리 시간: {et - st:.5f}초, 이미지: {img_path}")
-            if person_boxes:
-                # 각 bbox: [x1, y1, x2, y2]
-                areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in person_boxes]
-                max_idx = int(np.argmax(areas))
-                bbox = person_boxes[max_idx]
-                crop_img = self.yolo.crop_person_image_rtmw(frame, bbox)
-                if crop_img is not None:
+            crop_img, bbox = self.process_frame_with_yolo(frame)
+
+            if crop_img is not None:
+                ret, buffer = cv2.imencode('.jpg', crop_img)
+                if ret:
+                    self.send_pose_server(str(self.realtime_fps) + '.jpg', buffer.tobytes(), bbox)
                     # 디버그용 크롭 이미지 파일 저장
                     crop_filename = os.path.basename(img_path).replace('.jpg', '_crop.jpg')
                     crop_path = os.path.join(crop_folder, crop_filename)
                     cv2.imwrite(crop_path, crop_img)
                     
-                    # 파일로 저장하지 않고 메모리에서 JPEG 인코딩
-                    ret, buffer = cv2.imencode('.jpg', crop_img)
-                    if not ret:
-                        print(f"이미지 인코딩 실패: {img_path}")
-                        continue
-                    crop_bytes = buffer.tobytes()
+        return f"YOLO 크롭 완료"
 
-                    # --- 크롭 이미지 서버로 전송 (bbox 포함) ---
-                    try:
-                        files = {'image': (os.path.basename(img_path), crop_bytes, 'image/jpeg')}
-                        data = {
-                            'bbox': json.dumps(bbox.tolist() if hasattr(bbox, 'tolist') else bbox),
-                        }
-                        resp = requests.post(
-                            "http://192.168.100.135:5000/estimate_pose",
-                            files=files,
-                            data=data,
-                            timeout=10
-                        )
-                        if resp.status_code == 200:
-                            send_count += 1
-                            print(f"서버로 전송 성공: {send_count} , {img_path} ")
-                        else:
-                            print(f"서버 응답 오류: {resp.status_code} {resp.text}")
-                    except Exception as e:
-                        print(f"서버 전송 실패: {crop_filename} - {e}")
-        
-        # return 문을 모든 루프 완료 후로 이동하고 send_count 포함
-        return f"YOLO 크롭 완료: {count}개 이미지 저장, {send_count}개 서버 전송 성공"
+    def create_crop_folder(self, latest_folder):
+        # crop_folder 하위에 latest_folder 이름으로 폴더 생성
+        latest_folder_name = os.path.basename(latest_folder)
+        crop_folder = os.path.join("captured_cropped", latest_folder_name)
+        os.makedirs(crop_folder, exist_ok=True)
+        return crop_folder
