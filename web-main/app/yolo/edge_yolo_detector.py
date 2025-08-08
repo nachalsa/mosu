@@ -31,9 +31,9 @@ class EdgeYOLODetector:
         self.img_size = img_size
         
         # YOLO 모델 로드
-        print(f"🔧 YOLO11L 모델 로딩 중...")
+        print(f"🔧 {yolo_model} 모델 로딩 중...")
         self.model = YOLO(yolo_model)
-        print(f"✅ YOLO11L 모델 로딩 완료")
+        print(f"✅ {yolo_model} 모델 로딩 완료")
     
     def detect_persons(self, image: np.ndarray) -> List[List[float]]:
         try:

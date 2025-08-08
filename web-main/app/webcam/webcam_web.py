@@ -42,7 +42,8 @@ async def get_status():
         "camera_initialized": webcam.cap is not None and webcam.cap.isOpened(),
         "recording": webcam.capturing_images, #webcam.recording,
         "video_count": webcam.video_count,
-        "image_count": webcam.image_count
+        "image_count": webcam.image_count,
+        "translating": webcam.realtime_translate, #webcam.recording,
     }
 
 @router.post("/send_to_server")
@@ -55,3 +56,17 @@ async def send_to_server():
         traceback.print_exc()
         logging.error(f"send_to_server error: {e}")
         return JSONResponse({"error": str(e)}, status_code=500)
+
+@router.post("/start_realtime")
+async def start_realtime():
+    message = webcam.start_realtime()
+    return {"message": message}
+
+@router.post("/stop_realtime")
+async def stop_realtime():
+    message = webcam.stop_realtime()
+    return {"message": message}
+
+@router.post("/realtime_last_data")
+async def realtime_last_data():
+    return {"result": webcam.last_server_result}

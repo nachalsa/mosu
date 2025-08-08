@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FastAPI 웹캠 캡처</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+        .video-container {
+            text-align: center;
+            margin: 20px 0;
+        }
+        #video-stream {
+            max-width: 100%;
+            border: 2px solid #ddd;
+            border-radius: 5px;
+        }
+        .controls {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        .btn-primary {
+            background-color: #007bff;
+            color: white;
+        }
+        .btn-primary:hover {
+            background-color: #0056b3;
+        }
+        .btn-success {
+            background-color: #28a745;
+            color: white;
+        }
+        .btn-success:hover {
+            background-color: #1e7e34;
+        }
+        .btn-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        .status {
+            background-color: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 5px;
+            padding: 15px;
+            margin: 20px 0;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 5px;
+        }
+        .message.success {
+            background-color: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .message.error {
+            background-color: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        #overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 9999;
+            justify-content: center;
+            align-items: center;
+        }
+        #overlay .overlay-content {
+            background: #fff;
+            padding: 40px 60px;
+            border-radius: 10px;
+            font-size: 2em;
+            color: #007bff;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="overlay">
+        <div class="overlay-content">수화 번역중...</div>
+    </div>
+    <div class="container">
+        <h1>FastAPI 웹캠 캡처 시스템</h1>
+        
+        <div class="video-container">
+            <img id="video-stream" src="/webcam/video_feed" alt="비디오 스트림">
+        </div>
+        
+        <div class="controls">
+            <button class="btn-success" id="record-btn" onclick="toggleRecording()">번역 시작 (N)</button>
+        </div>
+        
+        <div id="result"></div>
+
+        <div id="messages"></div>
+
+        <div class="status" id="status">
+            <h3>시스템 상태</h3>
+            <p id="status-info">상태를 확인하는 중...</p>
+        </div>
+        
+
+        
+
+    </div>
+
+    <script>
+        let isTranslating = false;
+        
+        function showOverlay() {
+            document.getElementById('overlay').style.display = 'flex';
+        }
+        function hideOverlay() {
+            document.getElementById('overlay').style.display = 'none';
+        }
+        
+        // 녹화 토글 함수
+        async function toggleRecording() {
+            try {
+                const endpoint = isTranslating ? '/webcam/stop_realtime' : '/webcam/start_realtime';
+                const response = await fetch(endpoint, {
+                    method: 'POST',
+                });
+                const data = await response.json();
+                showMessage(data.message, 'success');
+                
+                // 녹화 상태 업데이트
+                isTranslating = !isTranslating;
+                updateRecordButton();
+                refreshStatus();
+            } catch (error) {
+                showMessage('녹화 처리 중 오류가 발생했습니다: ' + error.message, 'error');
+            }
+        }
+        
+        // 녹화 버튼 상태 업데이트
+        function updateRecordButton() {
+            const recordBtn = document.getElementById('record-btn');
+            if (isTranslating) {
+                recordBtn.textContent = '번역 종료 (N)';
+                recordBtn.className = 'btn-danger';
+            } else {
+                recordBtn.textContent = '번역 시작 (N)';
+                recordBtn.className = 'btn-success';
+            }
+        }
+        
+        // 상태 새로고침 함수
+        async function refreshStatus() {
+            try {
+                const response = await fetch('/webcam/status');
+                const data = await response.json();
+                
+                const statusInfo = document.getElementById('status-info');
+                statusInfo.innerHTML = `
+                    <strong>카메라:</strong> ${data.camera_initialized ? '연결됨' : '연결 안됨'}<br>
+                    <strong>번역 상태:</strong> ${data.translating ? '번역 중' : '정지'}<br>
+                    <!-- <strong>캡처된 비디오:</strong> ${data.video_count}개<br>
+                    <strong>캡처된 이미지:</strong> ${data.image_count}개 -->
+                `;
+                
+                // 서버의 녹화 상태와 클라이언트 상태 동기화
+                if (isTranslating !== data.translating) {
+                    isTranslating = data.translating;
+                    updateRecordButton();
+                }
+            } catch (error) {
+                document.getElementById('status-info').innerHTML = '상태 확인 중 오류 발생: ' + error.message;
+            }
+        }
+        
+        // 메시지 표시 함수
+        function showMessage(message, type = 'success') {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            messageDiv.textContent = message;
+            
+            messagesDiv.insertBefore(messageDiv, messagesDiv.firstChild);
+            
+            // 5초 후 메시지 제거
+            setTimeout(() => {
+                if (messageDiv.parentNode) {
+                    messageDiv.parentNode.removeChild(messageDiv);
+                }
+            }, 5000);
+        }
+        
+        // 페이지 로드시 초기 상태 확인
+        window.onload = function() {
+            refreshStatus();
+            // 주기적으로 상태 업데이트 (10초마다)
+            setInterval(refreshStatus, 10000);
+
+                // 1초마다 서버에서 실시간 결과 가져오기
+            setInterval(async () => {
+                try {
+                    if(!isTranslating){
+                        return;
+                    }
+                    const res = await fetch('/webcam/realtime_last_data', { method: 'POST' });
+                    const data = await res.json();
+                    document.getElementById('result').textContent =
+                        data.result ? JSON.stringify(data.result, null, 2) : '결과 없음';
+                } catch (e) {
+                    document.getElementById('result').textContent = '서버 결과 조회 오류';
+                }
+            }, 1000);
+        };
+        
+        // 비디오 스트림 에러 처리
+        document.getElementById('video-stream').onerror = function() {
+            showMessage('비디오 스트림을 로드할 수 없습니다. 카메라가 연결되어 있는지 확인하세요.', 'error');
+        };
+    </script>
+</body>
+</html>

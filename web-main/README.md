@@ -10,5 +10,5 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 실행 웹페이지
 http://localhost:8000/static/webcam.html
 
-결과 웹페이지
-http://localhost:8000/static/video_result.html
+실시간 웹페이지
+http://localhost:8000/static/webcam_realtime.html

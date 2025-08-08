@@ -14,6 +14,8 @@ class WebcamCapture:
         self.recording = False
         self.video_writer = None
         self.capturing_images = False
+        self.realtime_translate = False
+        self.realtime_fps = 0
         self.capture_folder = None
         self.capture_image_count = 0
         self.video_folder = "./captured_videos"
@@ -22,7 +24,8 @@ class WebcamCapture:
         self.image_count = 0
         self.w = 640
         self.h = 480
-        self.fps = 15
+        self.fps = 10
+        self.last_server_result = ""
         
         self.yolo = EdgeYOLODetector()  # YOLO 인스턴스 추가
         self.crop_folder = None
@@ -49,6 +52,23 @@ class WebcamCapture:
             self.video_writer.release()
             self.video_writer = None
     
+    def start_realtime(self):
+        """이미지 실시간 번역 시작"""
+        if not self.realtime_translate:
+            self.realtime_translate = True
+            self.realtime_fps = 0
+            self.last_server_result = ""
+            return f"실시간 번역 시작"
+        return "이미 실시간 번역 중입니다"
+
+    def stop_realtime(self):
+        """이미지 실시간 번역 시작"""
+        if not self.realtime_translate:
+            self.realtime_translate = True
+            self.realtime_fps = 0
+            return f"실시간 번역 종료"
+        return "이미 실시간 번역 중이 아닙니다."
+
     def start_capture_images(self):
         """이미지 연속 저장 시작"""
         if not self.capturing_images:
@@ -80,12 +100,14 @@ class WebcamCapture:
             if self.recording and self.video_writer:
                 self.video_writer.write(frame)
             # 이미지 연속 저장 중이면 파일로 저장
-            if self.capturing_images and self.capture_folder:
+            elif self.capturing_images and self.capture_folder:
                 self.capture_image_count += 1
                 image_path = os.path.join(
                     self.capture_folder, f"img_{self.capture_image_count:04d}.jpg"
                 )
                 cv2.imwrite(image_path, frame)
+            elif self.realtime_translate:
+                self.process_frame_with_yolo(frame);
 
             return frame
         return None
@@ -123,7 +145,12 @@ class WebcamCapture:
     
     def generate_frames(self):
         """스트리밍용 프레임 생성"""
+        # fps가 0이거나 None이면 기본값 30fps 사용
+        fps = self.fps if self.fps and self.fps > 0 else 30
+        target_interval = 1.0 / fps
+
         while True:
+            start = time.time()
             frame = self.capture_frame()
             if frame is not None:
                 # JPEG로 인코딩
@@ -132,7 +159,40 @@ class WebcamCapture:
                     frame_bytes = buffer.tobytes()
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + frame_bytes + b'\r\n')
-            time.sleep(0.03)  # 약 30fps
+            elapsed = time.time() - start
+            sleep_time = max(0, target_interval - elapsed)
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+
+    def process_frame_with_yolo(self, frame):
+        self.realtime_fps += 1 
+        person_boxes = self.yolo.detect_persons(frame)
+        if person_boxes:
+            areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in person_boxes]
+            max_idx = int(np.argmax(areas))
+            bbox = person_boxes[max_idx]
+            crop_img = self.yolo.crop_person_image_rtmw(frame, bbox)
+            if crop_img is not None:
+                ret, buffer = cv2.imencode('.jpg', crop_img)
+                if ret:
+                    crop_bytes = buffer.tobytes()
+                    try:
+                        files = {'image': (str(self.realtime_fps) + '.jpg', crop_bytes, 'image/jpeg')}
+                        data = {'bbox': json.dumps(bbox.tolist() if hasattr(bbox, 'tolist') else bbox)}
+                        resp = requests.post(
+                            "http://192.168.100.135:5000/estimate_pose",
+                            files=files,
+                            data=data,
+                            timeout=10
+                        )
+                        # 서버 응답을 전역변수 등에 저장 (예시)
+                        self.last_server_result = self.realtime_fps+"-서버 결과"#resp.json() if resp.status_code == 200 else None
+                        if resp.status_code == 200:
+                            print("서버 전송 성공")
+                        else:
+                            print("서버 전송 실패")
+                    except Exception as e:
+                        print(f"실시간 서버 전송 실패: {e}")
 
     def process_latest_folder_with_yolo(self):
         """가장 최근 폴더의 이미지를 YOLO로 크롭"""
