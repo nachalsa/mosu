@@ -94,6 +94,8 @@ class WebcamCapture:
         if not self.initialize_camera():
             return None
         
+        print("---------- capture_frame - ")
+
         ret, frame = self.cap.read()
         if ret:
             # 녹화 중이면 비디오에 저장
@@ -107,6 +109,7 @@ class WebcamCapture:
                 )
                 cv2.imwrite(image_path, frame)
             elif self.realtime_translate:
+                print("---------- process_frame_with_yolo - ")
                 self.process_frame_with_yolo(frame);
 
             return frame
@@ -166,7 +169,10 @@ class WebcamCapture:
 
     def process_frame_with_yolo(self, frame):
         self.realtime_fps += 1 
+        print(f"self.realtime_fps : {self.realtime_fps}")
+        s = time.time()
         person_boxes = self.yolo.detect_persons(frame)
+        print(f"YOLO 처리 시간: {time.time() - s:.5f}초")
         if person_boxes:
             areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in person_boxes]
             max_idx = int(np.argmax(areas))
@@ -177,6 +183,8 @@ class WebcamCapture:
                 if ret:
                     crop_bytes = buffer.tobytes()
                     try:
+                        print(f"call server ")
+
                         files = {'image': (str(self.realtime_fps) + '.jpg', crop_bytes, 'image/jpeg')}
                         data = {'bbox': json.dumps(bbox.tolist() if hasattr(bbox, 'tolist') else bbox)}
                         resp = requests.post(
