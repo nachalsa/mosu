@@ -69,4 +69,6 @@ async def stop_realtime():
 
 @router.post("/realtime_last_data")
 async def realtime_last_data():
-    return {"result": webcam.last_server_result}
+    return JSONResponse({
+        "result": webcam.last_server_result or "결과 없음"
+    })

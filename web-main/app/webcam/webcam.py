@@ -63,8 +63,8 @@ class WebcamCapture:
 
     def stop_realtime(self):
         """이미지 실시간 번역 시작"""
-        if not self.realtime_translate:
-            self.realtime_translate = True
+        if self.realtime_translate:
+            self.realtime_translate = False
             self.realtime_fps = 0
             return f"실시간 번역 종료"
         return "이미 실시간 번역 중이 아닙니다."
@@ -94,8 +94,6 @@ class WebcamCapture:
         if not self.initialize_camera():
             return None
         
-        print("---------- capture_frame - ")
-
         ret, frame = self.cap.read()
         if ret:
             # 녹화 중이면 비디오에 저장
@@ -109,7 +107,6 @@ class WebcamCapture:
                 )
                 cv2.imwrite(image_path, frame)
             elif self.realtime_translate:
-                print("---------- process_frame_with_yolo - ")
                 self.process_frame_with_yolo(frame);
 
             return frame
@@ -194,7 +191,7 @@ class WebcamCapture:
                             timeout=10
                         )
                         # 서버 응답을 전역변수 등에 저장 (예시)
-                        self.last_server_result = self.realtime_fps+"-서버 결과"#resp.json() if resp.status_code == 200 else None
+                        self.last_server_result = str(self.realtime_fps) + "-서버 결과"  # 수정
                         if resp.status_code == 200:
                             print("서버 전송 성공")
                         else:
