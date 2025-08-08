@@ -2,38 +2,28 @@ import os
 import json
 import cv2
 
-# COCO WholeBody skeleton (발 제외)
 COCO_WHOLEBODY_SKELETON = [
     # Body (0~16)
     [0, 1], [0, 2], [1, 3], [2, 4],
     [5, 6], [5, 7], [7, 9], [6, 8], [8, 10],
     [5, 11], [6, 12], [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
 
-    # Face (23~90) 일부 윤곽선만
-    # [23, 24], [24, 25], [25, 26], [26, 27], [27, 28], [28, 29], [29, 30], [30, 31], [31, 32],
-
     # Left Hand (91~111)
-    [91, 92], [92, 93], [93, 94],
-    [91, 95], [95, 96], [96, 97],
-    [91, 98], [98, 99], [99, 100],
-    [91, 101], [101, 102], [102, 103],
-    [91, 104], [104, 105], [105, 106],
+    [91, 92], [92, 93], [93, 94], [94, 95],         # Thumb
+    [91, 96], [96, 97], [97, 98], [98, 99],         # Index
+    [91, 100], [100, 101], [101, 102], [102, 103],  # Middle
+    [91, 104], [104, 105], [105, 106], [106, 107],  # Ring
+    [91, 108], [108, 109], [109, 110], [110, 111],  # Pinky
 
     # Right Hand (112~132)
-    [112, 113], [113, 114], [114, 115],
-    [112, 116], [116, 117], [117, 118],
-    [112, 119], [119, 120], [120, 121],
-    [112, 122], [122, 123], [123, 124],
-    [112, 125], [125, 126], [126, 127],
+    [112, 113], [113, 114], [114, 115], [115, 116],      # Thumb
+    [112, 117], [117, 118], [118, 119], [119, 120],      # Index
+    [112, 121], [121, 122], [122, 123], [123, 124],      # Middle
+    [112, 125], [125, 126], [126, 127], [127, 128],      # Ring
+    [112, 129], [129, 130], [130, 131], [131, 132],      # Pinky
 ]
 
-def draw_keypoints_wholebody_v2(image, keypoints, scores, threshold=2.0):
-    """
-    image: 원본 BGR 이미지
-    keypoints: [[x,y], ...] 133개
-    scores: [score, ...] 133개
-    threshold: 스코어 임계값 미만 keypoint 무시
-    """
+def draw_keypoints_wholebody(image, keypoints, scores, threshold=2.0):
     num_points = 133
 
     for idx in range(num_points):
@@ -51,12 +41,30 @@ def draw_keypoints_wholebody_v2(image, keypoints, scores, threshold=2.0):
             x2, y2 = keypoints[idx2]
             cv2.line(image, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
 
-def visualize_wholebody_on_original(
-    original_img_dir='/home/js/mosu/mosu/web-main/app/captured_datas/20250807210309',
-    cropped_data_dir='/home/js/mosu/mosu/web-main/app/captured_datas/20250807210309-crop',
-    output_dir='/home/js/mosu/mosu/web-main/app/skeleton/output',
-    threshold=2.0
-):
+def get_latest_capture_dirs():
+    """
+    현재 파일 기준 captured_datas 폴더에서 가장 최근 폴더 경로 반환
+    """
+    skeleton_dir = os.path.dirname(__file__)
+    captured_datas_dir = os.path.join(skeleton_dir, '..', 'captured_datas')
+
+    all_dirs = [d for d in os.listdir(captured_datas_dir)
+                if os.path.isdir(os.path.join(captured_datas_dir, d)) and d.isdigit()]
+
+    if not all_dirs:
+        raise RuntimeError("⚠️ 'captured_datas' 폴더에 유효한 캡처 폴더가 없습니다.")
+
+    latest_dir_name = max(all_dirs)
+    original_img_dir = os.path.join(captured_datas_dir, latest_dir_name)
+    cropped_data_dir = os.path.join(captured_datas_dir, f"{latest_dir_name}-crop")
+
+    return latest_dir_name, original_img_dir, cropped_data_dir
+
+def visualize_wholebody_on_original(threshold=2.0):
+    latest_dir_name, original_img_dir, cropped_data_dir = get_latest_capture_dirs()
+
+    # output 디렉토리 이름을 output_시간형태로
+    output_dir = os.path.join(os.path.dirname(__file__), f'output_{latest_dir_name}')
     os.makedirs(output_dir, exist_ok=True)
 
     for fname in os.listdir(cropped_data_dir):
@@ -66,7 +74,6 @@ def visualize_wholebody_on_original(
             with open(json_path, 'r') as f:
                 data = json.load(f)
 
-            # img_0001_1_pose_cebb6b13.json -> img_0001.jpg
             base_name = '_'.join(fname.split('_')[:2]) + '.jpg'
             original_img_path = os.path.join(original_img_dir, base_name)
 
@@ -90,7 +97,7 @@ def visualize_wholebody_on_original(
                 print(f"⚠️ 잘못된 길이: {fname}")
                 continue
 
-            draw_keypoints_wholebody_v2(img, keypoints, scores, threshold=threshold)
+            draw_keypoints_wholebody(img, keypoints, scores, threshold=threshold)
 
             out_path = os.path.join(output_dir, base_name)
             cv2.imwrite(out_path, img)
