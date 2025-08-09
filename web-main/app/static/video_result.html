@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>MOSU 수화번역 결과</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f5f5f5; }
+        .container { background: #fff; padding: 20px; border-radius: 10px; max-width: 600px; margin: 40px auto; }
+        #video-seq { width: 100%; border: 2px solid #ddd; }
+        #word { font-size: 2em; color: #007bff; text-align: center; margin-top: 20px; }
+        .controls { text-align: center; margin-top: 20px; }
+        button { padding: 10px 20px; font-size: 1em; margin: 0 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>MOSU 수화번역 결과</h1>
+        <img id="video-seq" src="" alt="이미지 시퀀스">
+        <div id="word">단어: </div>
+        <div class="controls">
+            <button id="play-btn">재생</button>
+            <button id="replay-btn">다시 재생</button>
+        </div>
+    </div>
+        
+    <script>
+        let images = [];
+        let idx = 0;
+        let playing = false;
+        let intervalId = null;
+
+        // 이미지 프리로드 함수
+        function preloadImages(imageInfos) {
+            imageInfos.forEach(info => {
+                const img = new Image();
+                img.src = info.url;
+            });
+        }
+
+        async function fetchImages() {
+            const res = await fetch('/video_result/video_result_images');
+            const data = await res.json();
+            images = data.images || [];
+            idx = 0;
+            preloadImages(images);
+        }
+
+        function showFrame() {
+            if (images.length === 0) return;
+            const videoElem = document.getElementById('video-seq');
+            const wordElem = document.getElementById('word');
+
+            videoElem.src = images[idx].url; // 반드시 .url로!
+            wordElem.textContent = "단어: " + (images[idx].word || "");
+            idx = (idx + 1) % images.length;
+        }
+
+        function playSequence() {
+            if (playing) return;
+            playing = true;
+            intervalId = setInterval(showFrame, 40); // 더 빠르게 (40ms = 25fps)
+        }
+
+        function stopSequence() {
+            playing = false;
+            if (intervalId) clearInterval(intervalId);
+        }
+
+        document.getElementById('play-btn').onclick = async () => {
+            stopSequence();
+            await fetchImages();
+            playSequence();
+        };
+        document.getElementById('replay-btn').onclick = async () => {
+            stopSequence();
+            await fetchImages();
+            playSequence();
+        };
+
+        // 최초 자동 재생
+        (async () => {
+            await fetchImages();
+            playSequence();
+        })();
+</script>
+
+</body>
+</html>
