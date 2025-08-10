@@ -1,9 +1,18 @@
-
 import cv2
 import numpy as np
 from typing import List, Optional, Tuple
 from pathlib import Path
 from collections import deque
+
+# Add Hailo imports
+try:
+    from hailo_platform import (HEF, VDevice, HailoStreamInterface, 
+                                InferVStreams, ConfigureParams)
+    HAILO_AVAILABLE = True
+    print("✅ Hailo platform available")
+except ImportError:
+    print("⚠️ Hailo platform not available, falling back to CPU")
+    HAILO_AVAILABLE = False
 
 try:
     from ultralytics import YOLO
@@ -13,35 +22,108 @@ except ImportError:
     YOLO_AVAILABLE = False
 
 class EdgeYOLODetector:
-    """엣지 디바이스용 YOLO 검출기"""
+    """엣지 디바이스용 YOLO 검출기 (Hailo-8 가속 지원)"""
     
     def __init__(self, 
                  yolo_model: str = "yolov8n.pt",
+                 hailo_model: str = "yolov8n.hef",  # .hef 파일 경로
+                 use_hailo: bool = True,
                  conf_thresh: float = 0.6,
                  iou_thresh: float = 0.6,
                  max_det: int = 1,
                  img_size: int = 320):
         
-        if not YOLO_AVAILABLE:
-            raise ImportError("ultralytics가 필요합니다: pip install ultralytics")
-        
         self.conf_thresh = conf_thresh
         self.iou_thresh = iou_thresh
         self.max_det = max_det
         self.img_size = img_size
+        self.use_hailo = use_hailo and HAILO_AVAILABLE
         
-        # YOLO 모델 로드
+        if self.use_hailo and hailo_model:
+            self._init_hailo(hailo_model)
+        else:
+            self._init_ultralytics(yolo_model)
+    
+    def _init_hailo(self, hailo_model: str):
+        """Hailo 모델 초기화"""
+        try:
+            print(f"🔧 Hailo 모델 로딩 중: {hailo_model}")
+            
+            # HEF 파일 로드
+            self.hef = HEF(hailo_model)
+            
+            # VDevice 생성
+            self.target = VDevice()
+            
+            # 네트워크 그룹 설정
+            self.network_group = self.target.configure(self.hef)[0]
+            self.network_group_params = self.network_group.create_params()
+            
+            # 입력/출력 스트림 설정
+            self.input_vstreams_params = self.network_group.make_input_vstream_params(
+                quantized=False, format_type=HailoStreamInterface.UINT8
+            )
+            self.output_vstreams_params = self.network_group.make_output_vstream_params(
+                quantized=False, format_type=HailoStreamInterface.FLOAT32
+            )
+            
+            print("✅ Hailo 모델 로딩 완료")
+            self.backend = "hailo"
+            
+        except Exception as e:
+            print(f"❌ Hailo 초기화 실패: {e}")
+            print("CPU 모드로 전환합니다...")
+            self._init_ultralytics("yolov8n.pt")
+    
+    def _init_ultralytics(self, yolo_model: str):
+        """Ultralytics 모델 초기화 (CPU/GPU 백엔드)"""
+        if not YOLO_AVAILABLE:
+            raise ImportError("ultralytics가 필요합니다: pip install ultralytics")
+        
         print(f"🔧 {yolo_model} 모델 로딩 중...")
         self.model = YOLO(yolo_model)
         print(f"✅ {yolo_model} 모델 로딩 완료")
+        self.backend = "ultralytics"
     
     def detect_persons(self, image: np.ndarray) -> List[List[float]]:
+        """사람 검출 (Hailo 또는 Ultralytics 사용)"""
+        if self.backend == "hailo":
+            return self._detect_persons_hailo(image)
+        else:
+            return self._detect_persons_ultralytics(image)
+    
+    def _detect_persons_hailo(self, image: np.ndarray) -> List[List[float]]:
+        """Hailo를 사용한 사람 검출"""
+        try:
+            # 이미지 전처리
+            input_data = self._preprocess_for_hailo(image)
+            
+            # Hailo 추론
+            with InferVStreams(self.network_group, 
+                             self.input_vstreams_params, 
+                             self.output_vstreams_params) as infer_pipeline:
+                
+                # 추론 실행
+                outputs = infer_pipeline.infer({
+                    list(self.input_vstreams_params.keys())[0]: input_data
+                })
+                
+                # 후처리
+                person_boxes = self._postprocess_hailo_output(outputs, image.shape)
+                return person_boxes
+                
+        except Exception as e:
+            print(f"❌ Hailo 검출 실패: {e}")
+            return []
+    
+    def _detect_persons_ultralytics(self, image: np.ndarray) -> List[List[float]]:
+        """기존 Ultralytics 검출 방식"""
         try:
             results = self.model(
                 image,
                 conf=self.conf_thresh,
                 iou=self.iou_thresh,
-                max_det=1,  # 50 → 1 (가장 큰 것 1개만)
+                max_det=1,
                 classes=[0],
                 verbose=False,
                 imgsz=self.img_size
@@ -53,7 +135,6 @@ class EdgeYOLODetector:
                 if boxes is not None and len(boxes) > 0:
                     person_coords = boxes.xyxy
                     
-                    # numpy 변환만
                     if hasattr(person_coords, 'cpu'):
                         person_coords = person_coords.cpu().numpy()
                     
@@ -64,6 +145,37 @@ class EdgeYOLODetector:
         except Exception as e:
             print(f"❌ YOLO 검출 실패: {e}")
             return []
+    
+    def _preprocess_for_hailo(self, image: np.ndarray) -> np.ndarray:
+        """Hailo 입력을 위한 전처리"""
+        # 이미지 크기 조정 (Hailo 모델의 입력 크기에 맞춤)
+        resized = cv2.resize(image, (self.img_size, self.img_size))
+        
+        # BGR to RGB 변환
+        rgb_image = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        
+        # 정규화 (0-255 -> 0-1)
+        normalized = rgb_image.astype(np.float32) / 255.0
+        
+        # 배치 차원 추가 [H,W,C] -> [1,H,W,C]
+        input_data = np.expand_dims(normalized, axis=0)
+        
+        return input_data
+    
+    def _postprocess_hailo_output(self, outputs: dict, original_shape: tuple) -> List[List[float]]:
+        """Hailo 출력 후처리"""
+        # 이 부분은 사용하는 YOLO 모델의 출력 형식에 따라 수정 필요
+        # 일반적으로 [batch, boxes, 5+classes] 형태
+        
+        person_boxes = []
+        
+        # 출력에서 첫 번째 텐서 가져오기 (보통 detection 결과)
+        detection_output = list(outputs.values())[0]
+        
+        # 후처리 로직 (NMS, 좌표 변환 등)
+        # 이 부분은 실제 Hailo 모델의 출력 형식에 맞게 구현해야 함
+        
+        return person_boxes
     
     def crop_person_image_rtmw(self, image: np.ndarray, bbox: List[float]) -> Optional[np.ndarray]:
         """RTMW 방식으로 사람 이미지 크롭"""

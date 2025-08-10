@@ -28,8 +28,17 @@ class WebcamCapture:
         self.fps = 10
         self.last_server_result = ""
         self.mmpose_server_ip = "192.168.100.135:5000"
+        self.rotation_angle = 0  # 0, 90, 180, 270 도 회전
         
-        self.yolo = EdgeYOLODetector()  # YOLO 인스턴스 추가
+        # Set the path to your .hef file
+        hailo_model_path = os.path.join(os.path.dirname(__file__), "..", "yolov8n.hef")  # Adjust filename if different
+        
+        # Initialize YOLO with both models
+        self.yolo = EdgeYOLODetector(
+            yolo_model="yolov8n.pt",  # CPU fallback model
+            hailo_model="yolov8n.pt" if os.path.exists(hailo_model_path) else None,
+            use_hailo=True
+        )
         self.crop_folder = None
 
         # 폴더 생성
@@ -91,13 +100,35 @@ class WebcamCapture:
             return f"이미지 캡처 종료: {folder}"
         return "이미지 캡처 중이 아닙니다"
 
+    def rotate_image(self, image):
+        """이미지 회전"""
+        if self.rotation_angle == 0:
+            return image
+        elif self.rotation_angle == 90:
+            return cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+        elif self.rotation_angle == 180:
+            return cv2.rotate(image, cv2.ROTATE_180)
+        elif self.rotation_angle == 270:
+            return cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        return image
+    
+    def set_rotation(self, angle):
+        """회전 각도 설정"""
+        if angle in [0, 90, 180, 270]:
+            self.rotation_angle = angle
+            return f"화면 회전: {angle}도"
+        return "잘못된 회전 각도입니다"
+    
     def capture_frame(self):
-        """프레임 캡처"""
+        """프레임 캡처 (회전 적용)"""
         if not self.initialize_camera():
             return None
         
         ret, frame = self.cap.read()
         if ret:
+            # 회전 적용
+            frame = self.rotate_image(frame)
+            
             # 녹화 중이면 비디오에 저장
             if self.recording and self.video_writer:
                 self.video_writer.write(frame)
@@ -110,7 +141,7 @@ class WebcamCapture:
                 cv2.imwrite(image_path, frame)
             elif self.realtime_translate:
                 self.realtime_fps += 1 
-                crop_img, bbox = self.process_frame_with_yolo(frame);
+                crop_img, bbox = self.process_frame_with_yolo(frame)
                 if crop_img is not None:
                         ret, buffer = cv2.imencode('.jpg', crop_img)
                         if ret:

@@ -67,6 +67,13 @@
         .btn-danger:hover {
             background-color: #c82333;
         }
+        .btn-warning {
+            background-color: #ffc107;
+            color: #212529;
+        }
+        .btn-warning:hover {
+            background-color: #e0a800;
+        }
         .status {
             background-color: #f8f9fa;
             border: 1px solid #dee2e6;
@@ -121,7 +128,9 @@
         </div>
         
         <div class="controls">
-            <button class="btn-success" id="record-btn" onclick="toggleRecording()">번역 시작 (N)</button>
+            <button class="btn-success" id="record-btn" onclick="toggleRecording()">번역 시작</button>
+            <button class="btn-warning" id="rotate-btn" onclick="rotateCamera()">화면 회전</button>
+            <!-- <button class="btn-primary" onclick="testAutoStop()">자동종료 테스트</button> -->
         </div>
         
         <div id="result"></div>
@@ -132,14 +141,12 @@
             <h3>시스템 상태</h3>
             <p id="status-info">상태를 확인하는 중...</p>
         </div>
-        
-
-        
 
     </div>
 
     <script>
         let isTranslating = false;
+        let currentRotation = 0;
         
         function showOverlay() {
             document.getElementById('overlay').style.display = 'flex';
@@ -167,6 +174,38 @@
             }
         }
         
+        // 카메라 회전 함수 - 0도와 270도만 토글
+        async function rotateCamera() {
+            try {
+                // 0도 → 270도, 270도 → 0도
+                const newAngle = (currentRotation === 0) ? 270 : 0;
+                
+                const response = await fetch('/webcam/set_rotation', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ angle: newAngle })
+                });
+                const data = await response.json();
+                showMessage(data.message, 'success');
+                currentRotation = data.angle;
+                updateRotateButton();
+            } catch (error) {
+                showMessage('화면 회전 중 오류가 발생했습니다: ' + error.message, 'error');
+            }
+        }
+        
+        // 회전 버튼 상태 업데이트
+        function updateRotateButton() {
+            const rotateBtn = document.getElementById('rotate-btn');
+            if (currentRotation === 0) {
+                rotateBtn.textContent = '화면 회전  (세로)';
+            } else {
+                rotateBtn.textContent = '화면 회전  (가로)';
+            }
+        }
+        
         // 녹화 버튼 상태 업데이트
         function updateRecordButton() {
             const recordBtn = document.getElementById('record-btn');
@@ -186,9 +225,11 @@
                 const data = await response.json();
                 
                 const statusInfo = document.getElementById('status-info');
+                const orientationText = currentRotation === 0 ? '세로' : '가로';
                 statusInfo.innerHTML = `
                     <strong>카메라:</strong> ${data.camera_initialized ? '연결됨' : '연결 안됨'}<br>
                     <strong>번역 상태:</strong> ${data.translating ? '번역 중' : '정지'}<br>
+                    <strong>화면 방향:</strong> ${orientationText} (${currentRotation}°)<br>
                     <!-- <strong>캡처된 비디오:</strong> ${data.video_count}개<br>
                     <strong>캡처된 이미지:</strong> ${data.image_count}개 -->
                 `;
@@ -200,6 +241,18 @@
                 }
             } catch (error) {
                 document.getElementById('status-info').innerHTML = '상태 확인 중 오류 발생: ' + error.message;
+            }
+        }
+        
+        // 회전 각도 조회
+        async function getCurrentRotation() {
+            try {
+                const response = await fetch('/webcam/get_rotation');
+                const data = await response.json();
+                currentRotation = data.angle;
+                updateRotateButton();
+            } catch (error) {
+                console.error('회전 각도 조회 실패:', error);
             }
         }
         
@@ -220,13 +273,28 @@
             }, 5000);
         }
         
+        // 자동종료 테스트 함수
+        async function testAutoStop() {
+            try {
+                const response = await fetch('/webcam/test_auto_stop', {
+                    method: 'POST',
+                });
+                const data = await response.json();
+                showMessage(data.message, 'success');
+            } catch (error) {
+                showMessage('테스트 실패: ' + error.message, 'error');
+            }
+        }
+        
         // 페이지 로드시 초기 상태 확인
         window.onload = function() {
             refreshStatus();
-            // 주기적으로 상태 업데이트 (10초마다)
-            setInterval(refreshStatus, 10000);
+            getCurrentRotation(); // 현재 회전 각도 조회
+            
+            // 주기적으로 상태 업데이트 (1초마다)
+            setInterval(refreshStatus, 1000);
 
-                // 1초마다 서버에서 실시간 결과 가져오기
+            // 1초마다 서버에서 실시간 결과 가져오기
             setInterval(async () => {
                 try {
                     if(!isTranslating){
@@ -236,6 +304,12 @@
                     const data = await res.json();
                     document.getElementById('result').textContent =
                         data.result ? JSON.stringify(data.result, null, 2) : '결과 없음';
+
+                    // '미안함'이 들어오면 자동으로 번역 종료
+                    if (data.result && data.result.includes('미안함') && isTranslating) {
+                        showMessage('수화 번역이 완료되어 자동으로 종료됩니다.', 'success');
+                        toggleRecording();
+                    }
                 } catch (e) {
                     document.getElementById('result').textContent = '서버 결과 조회 오류';
                 }
