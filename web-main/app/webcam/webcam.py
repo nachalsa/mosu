@@ -191,45 +191,72 @@ class WebcamCapture:
         s = time.time()
         person_boxes = self.yolo.detect_persons(frame)
         print(f"YOLO 처리 시간: {time.time() - s:.5f}초")
-        
-        # 원본 프레임 복사 (수정 전 백업)
         original_frame = frame.copy()
-        
+
         if person_boxes:
             areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in person_boxes]
             max_idx = int(np.argmax(areas))
             bbox = person_boxes[max_idx]
-            ci = self.yolo.crop_person_image_rtmw(frame, bbox)
-            
-            # 수화 인식 + 시각화
-            if ci is not None:
-                sign_word, annotated_crop = self.sign_detector.predict_sign_with_visualization(ci)
+            x1, y1, x2, y2 = map(int, bbox)
+            person_crop = frame[y1:y2, x1:x2].copy()
+
+            # MediaPipe로 손 검출 (사람 bbox 내에서)
+            mp_hands = self.sign_detector.mp_hands
+            hands = self.sign_detector.hands
+            rgb_person_crop = cv2.cvtColor(person_crop, cv2.COLOR_BGR2RGB)
+            results = hands.process(rgb_person_crop)
+
+            if results.multi_hand_landmarks:
+                hand_landmarks = results.multi_hand_landmarks[0]
+                h, w = person_crop.shape[:2]
+                xs = [lm.x for lm in hand_landmarks.landmark]
+                ys = [lm.y for lm in hand_landmarks.landmark]
+                # 더 넉넉하게 패딩, 최소 크기 보장
+                pad = 40
+                hx1 = int(max(min(xs) * w - pad, 0))
+                hy1 = int(max(min(ys) * h - pad, 0))
+                hx2 = int(min(max(xs) * w + pad, w))
+                hy2 = int(min(max(ys) * h + pad, h))
+                # 최소 크기 보장 (예: 64x64)
+                min_size = 64
+                if hx2 - hx1 < min_size:
+                    center_x = (hx1 + hx2) // 2
+                    hx1 = max(center_x - min_size // 2, 0)
+                    hx2 = min(center_x + min_size // 2, w)
+                if hy2 - hy1 < min_size:
+                    center_y = (hy1 + hy2) // 2
+                    hy1 = max(center_y - min_size // 2, 0)
+                    hy2 = min(center_y + min_size // 2, h)
+                hand_crop = person_crop[hy1:hy2, hx1:hx2].copy()
+
+                # 디버깅: 실제 모델 입력 이미지 저장
+                cv2.imwrite(f"/tmp/hand_crop_{self.realtime_fps}.jpg", hand_crop)
+
+                # 손만 crop된 이미지를 ASL 모델에 전달
+                sign_word, annotated_crop = self.sign_detector.predict_sign_with_visualization(hand_crop)
                 print(f"인식된 수화: {sign_word}")
                 self.last_server_result = f"{self.realtime_fps}-{sign_word}"
-                
-                # 시각화된 크롭을 원본 프레임에 합성
+
+                # 손 bbox를 원본 프레임 좌표로 변환
+                abs_hx1, abs_hy1, abs_hx2, abs_hy2 = x1+hx1, y1+hy1, x1+hx2, y1+hy2
                 try:
-                    x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-                    
-                    # 프레임 경계 체크
-                    h, w = original_frame.shape[:2]
-                    x1 = max(0, min(x1, w))
-                    y1 = max(0, min(y1, h))
-                    x2 = max(x1, min(x2, w))
-                    y2 = max(y1, min(y2, h))
-                    
-                    # 크롭 이미지 크기 조정
-                    bbox_h, bbox_w = y2 - y1, x2 - x1
+                    H, W = original_frame.shape[:2]
+                    abs_hx1 = max(0, min(abs_hx1, W))
+                    abs_hy1 = max(0, min(abs_hy1, H))
+                    abs_hx2 = max(abs_hx1, min(abs_hx2, W))
+                    abs_hy2 = max(abs_hy1, min(abs_hy2, H))
+                    crop_h, crop_w = annotated_crop.shape[:2]
+                    bbox_h, bbox_w = abs_hy2 - abs_hy1, abs_hx2 - abs_hx1
                     if bbox_h > 0 and bbox_w > 0:
                         annotated_crop_resized = cv2.resize(annotated_crop, (bbox_w, bbox_h))
-                        original_frame[y1:y2, x1:x2] = annotated_crop_resized
-                    
+                        original_frame[abs_hy1:abs_hy2, abs_hx1:abs_hx2] = annotated_crop_resized
                 except Exception as e:
                     print(f"프레임 합성 오류: {e}")
-            
-            return ci, bbox, original_frame  # 원본 프레임 반환
-        
-        return None, None, original_frame  # 사람이 없어도 원본 프레임 반환
+
+                return hand_crop, [abs_hx1, abs_hy1, abs_hx2, abs_hy2], original_frame
+
+        return None, None, original_frame
+
 
 
     def send_pose_server(self, filename, crop_bytes, bbox):
