@@ -293,7 +293,15 @@ class MosuServer:
         self.port = port
         
         # 컴포넌트 초기화
-        self.pose_estimator = RTMWPoseEstimator(device=device)
+        try:
+            # 네트워크 포즈 추정기 시도
+            from network_pose_estimator import NetworkPoseEstimator
+            self.pose_estimator = NetworkPoseEstimator("http://192.168.100.135:5000")
+            logger.info("🌐 네트워크 포즈 추정기 사용")
+        except Exception as e:
+            logger.warning(f"⚠️ 네트워크 포즈 추정기 실패, RTMW 사용: {e}")
+            self.pose_estimator = RTMWPoseEstimator(device=device)
+        
         self.sign_inferencer = SignLanguageInferencer(model_path, device)
         
         # FastAPI 앱 설정

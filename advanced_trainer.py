@@ -68,6 +68,10 @@ class AdvancedSignLanguageTrainer:
         
         # 디바이스별 최적화
         DeviceManager.optimize_for_device(self.device, self.config.multi_gpu)
+        
+        # Vocabulary 정보 저장 (나중에 사용)
+        self.vocab_words = None
+        self.word_to_id = None
     
     def load_and_prepare_data(self) -> Tuple[UnifiedSignLanguageDataset, StratifiedDataSplitter]:
         """데이터 로드 및 분할 준비"""
@@ -88,6 +92,15 @@ class AdvancedSignLanguageTrainer:
         
         logger.info(f"✅ 데이터셋 로드 완료: {len(base_dataset)}개 세그먼트")
         logger.info(f"   어휘 크기: {base_dataset.vocab_size}")
+        
+        # Vocabulary 정보 저장
+        self.vocab_words = getattr(base_dataset, 'words', [])
+        self.word_to_id = getattr(base_dataset, 'word_to_id', {})
+        if not self.vocab_words and hasattr(base_dataset, 'dataset') and hasattr(base_dataset.dataset, 'words'):
+            self.vocab_words = base_dataset.dataset.words
+            self.word_to_id = getattr(base_dataset.dataset, 'word_to_id', {})
+        
+        logger.info(f"   Vocabulary 단어 수: {len(self.vocab_words)}")
         
         # 데이터 분할기 생성
         splitter = StratifiedDataSplitter(
@@ -292,9 +305,24 @@ class AdvancedSignLanguageTrainer:
                     'model_state_dict': model.state_dict(),
                     'val_loss': best_val_loss,
                     'val_accuracy': best_val_accuracy,
-                    'config': stage_config.__dict__
+                    'config': stage_config.__dict__,
+                    'vocab_words': self.vocab_words,
+                    'word_to_id': self.word_to_id,
+                    'vocab_size': len(self.vocab_words) if self.vocab_words else 0,
+                    'model_config': {
+                        'vocab_size': len(self.vocab_words) if self.vocab_words else 0,
+                        'embed_dim': 384,
+                        'num_encoder_layers': 6,
+                        'num_decoder_layers': 4,
+                        'num_heads': 8,
+                        'dim_feedforward': 1024,
+                        'max_seq_len': 200,
+                        'dropout': stage_config.dropout_rate
+                    }
                 }, best_model_path)
                 logger.info(f"💾 최고 성능 모델 저장: {best_model_path}")
+                if self.vocab_words:
+                    logger.info(f"   📚 Vocabulary 포함: {len(self.vocab_words)}개 단어")
             
             # 테스트 평가 (선택적)
             if self.config.evaluate_on_test and (stage_idx + 1) % self.config.test_every_n_stages == 0:
