@@ -201,6 +201,11 @@ class AdvancedTrainingConfig:
     # 디바이스 설정
     device: str = "auto"
     
+    # 멀티 GPU 설정
+    multi_gpu: bool = False
+    use_data_parallel: bool = True  # DataParallel 사용 여부
+    auto_adjust_batch_size: bool = True  # 멀티 GPU에 맞게 배치 크기 자동 조정
+    
     # 실험 관리
     experiment_name: str = "multi_stage_training"
     save_intermediate_results: bool = True

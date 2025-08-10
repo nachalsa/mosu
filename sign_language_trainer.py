@@ -108,8 +108,10 @@ class SignLanguageTrainer:
         logger.info(f"🔧 트레이너 초기화 완료:")
         logger.info(f"   - 디바이스: {self.device}")
         logger.info(f"   - 모델 파라미터: {sum(p.numel() for p in self.model.parameters()):,}")
-        logger.info(f"   - 훈련 배치: {len(self.train_dataloader)}")
-        logger.info(f"   - 검증 배치: {len(self.val_dataloader)}")
+        if self.train_dataloader is not None:
+            logger.info(f"   - 훈련 배치: {len(self.train_dataloader)}")
+        if self.val_dataloader is not None:
+            logger.info(f"   - 검증 배치: {len(self.val_dataloader)}")
     
     def request_shutdown(self):
         """종료 요청"""
