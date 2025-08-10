@@ -12,3 +12,6 @@ http://localhost:8000/static/webcam.html
 
 실시간 웹페이지
 http://localhost:8000/static/webcam_realtime.html
+
+
+pip install mediapipe tensorflow numpy openvino

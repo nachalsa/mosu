@@ -7,6 +7,7 @@ import glob
 import requests
 import json
 import numpy as np
+from sign.sign_language_detector import SignLanguageDetector
 
 class WebcamCapture:
     def __init__(self):
@@ -31,7 +32,9 @@ class WebcamCapture:
         
         self.yolo = EdgeYOLODetector()  # YOLO 인스턴스 추가
         self.crop_folder = None
-
+        asl_model_path = "models/asl_model.xml"
+        self.sign_detector = SignLanguageDetector(model_path=asl_model_path)
+        
         # 폴더 생성
         os.makedirs(self.video_folder, exist_ok=True)
         os.makedirs(self.image_folder, exist_ok=True)
@@ -110,11 +113,11 @@ class WebcamCapture:
                 cv2.imwrite(image_path, frame)
             elif self.realtime_translate:
                 self.realtime_fps += 1 
-                crop_img, bbox = self.process_frame_with_yolo(frame);
-                if crop_img is not None:
-                        ret, buffer = cv2.imencode('.jpg', crop_img)
-                        if ret:
-                            self.send_pose_server(str(self.realtime_fps) + '.jpg', buffer.tobytes(), bbox)
+                crop_img, bbox, frame = self.process_frame_with_yolo2(frame);
+                    #if crop_img is not None:
+                    #        ret, buffer = cv2.imencode('.jpg', crop_img)
+                    #        if ret:
+                    #            self.send_pose_server(str(self.realtime_fps) + '.jpg', buffer.tobytes(), bbox)
 
             return frame
         return None
@@ -183,8 +186,54 @@ class WebcamCapture:
             return ci, bbox 
         return None, None
 
+    def process_frame_with_yolo2(self, frame):
+        """YOLO + 수화 인식 + 시각화 (프레임 반환 수정)"""
+        s = time.time()
+        person_boxes = self.yolo.detect_persons(frame)
+        print(f"YOLO 처리 시간: {time.time() - s:.5f}초")
+        
+        # 원본 프레임 복사 (수정 전 백업)
+        original_frame = frame.copy()
+        
+        if person_boxes:
+            areas = [(box[2] - box[0]) * (box[3] - box[1]) for box in person_boxes]
+            max_idx = int(np.argmax(areas))
+            bbox = person_boxes[max_idx]
+            ci = self.yolo.crop_person_image_rtmw(frame, bbox)
+            
+            # 수화 인식 + 시각화
+            if ci is not None:
+                sign_word, annotated_crop = self.sign_detector.predict_sign_with_visualization(ci)
+                print(f"인식된 수화: {sign_word}")
+                self.last_server_result = f"{self.realtime_fps}-{sign_word}"
+                
+                # 시각화된 크롭을 원본 프레임에 합성
+                try:
+                    x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
+                    
+                    # 프레임 경계 체크
+                    h, w = original_frame.shape[:2]
+                    x1 = max(0, min(x1, w))
+                    y1 = max(0, min(y1, h))
+                    x2 = max(x1, min(x2, w))
+                    y2 = max(y1, min(y2, h))
+                    
+                    # 크롭 이미지 크기 조정
+                    bbox_h, bbox_w = y2 - y1, x2 - x1
+                    if bbox_h > 0 and bbox_w > 0:
+                        annotated_crop_resized = cv2.resize(annotated_crop, (bbox_w, bbox_h))
+                        original_frame[y1:y2, x1:x2] = annotated_crop_resized
+                    
+                except Exception as e:
+                    print(f"프레임 합성 오류: {e}")
+            
+            return ci, bbox, original_frame  # 원본 프레임 반환
+        
+        return None, None, original_frame  # 사람이 없어도 원본 프레임 반환
+
 
     def send_pose_server(self, filename, crop_bytes, bbox):
+        return
         # todo 나머지 완료되거나 서버 확정 시 수정해 주세요.
         try:
             files = {'image': (filename, crop_bytes, 'image/jpeg')}
