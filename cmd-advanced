@@ -1,0 +1,17 @@
+# 기본 다단계 학습 실행
+python advanced_train.py
+
+# 빠른 테스트 (작은 에포크 수)
+python advanced_train.py --quick-test --log-level DEBUG
+
+# 보수적인 학습 전략
+python advanced_train.py --stages-config conservative --patience 20
+
+# 공격적인 학습 전략
+python advanced_train.py --stages-config aggressive --experiment-name aggressive_exp
+
+# 커스텀 설정
+python advanced_train.py --seed 123 --train-ratio 0.85 --device xpu --experiment-name custom_experiment
+
+# 특정 GPU에서 실행
+CUDA_VISIBLE_DEVICES=0 python advanced_train.py --device cuda

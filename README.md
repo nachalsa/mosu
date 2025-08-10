@@ -52,3 +52,76 @@ Transformer (Encoder-only 또는 Encoder-Decoder)와 같은 딥러닝 모델의 
 2. **LLM 요청**: PC는 생성된 자연어 텍스트(수화 인식 결과)를 SSH 터널을 통해 서버의 vLLM 엔드포인트로 HTTP 요청(GET/POST)을 보냅니다. vLLM은 LLM 추론을 최적화하여 빠른 응답을 제공합니다.
 3. **LLM 응답 수신**: vLLM은 입력받은 텍스트를 기반으로 LLM 추론을 수행하고, 생성된 답변을 다시 SSH 터널을 통해 PC로 보냅니다.
 4. **응답 처리**: PC는 서버로부터 받은 LLM의 답변을 사용자에게 표시하거나 다음 단계의 처리(예: TTS를 통한 음성 출력)에 활용합니다.
+
+
+
+---
+## 임시 내용
+지금 yolo 모델이 박스를 여러개 보내게 되어있는데 제일 높은거 하나만 보내게 바꾸고 박스를 288 384로 잘라서 보내게 되어있는데 rtmw-l이 추론한 결과는 이 288 384에 맞는 사이즈라 이걸로 스켈레톤 표시가 어려워 이걸 맞춰서 변환하게 만드는 로직을 추가해줘
+
+---
+
+I need to analyze the code to understand how to make the requested changes. Let me first examine the relevant parts of the YOLO detection and pose estimation pipeline.
+
+I need to analyze the code to understand the current YOLO detection and pose estimation pipeline, then identify the specific areas that need modification based on the developer's request.
+
+Read yolo-server.py, lines 123 to 165
+
+I'll help you find the relevant code for implementing the requested changes. Let me search for the specific areas that need modification.
+
+Read yolo-server.py, lines 123 to 160
+
+I'll help you find the relevant code for implementing the requested changes. Let me analyze the current YOLO detection and pose estimation pipeline to identify the specific areas that need modification.
+
+Read yolo-server.py, lines 123 to 160
+
+I'll help you find the relevant code for implementing the requested changes. Let me analyze the current YOLO detection and pose estimation pipeline to identify the specific areas that need modification.
+
+Read yolo-server.py, lines 123 to 160
+
+I'll help you find the relevant code for implementing the requested changes. Let me analyze the current YOLO detection and pose estimation pipeline to identify the specific areas that need modification.
+
+코드를 분석해보니 두 가지 문제를 해결해야 합니다:
+
+YOLO에서 가장 높은 신뢰도의 박스만 선택하도록 수정
+288x384 크롭 좌표를 원본 이미지 좌표로 정확히 변환하는 로직 추가
+이를 위해 코드를 수정하겠습니다.
+
+yolo-server.py+4-4
+이제 크롭 좌표를 원본 좌표로 변환하는 정확한 로직을 추가하겠습니다. EdgeServer 클래스에 새로운 메서드를 추가하겠습니다:
+
+yolo-server.py+43-0
+이제 시각화 부분에서 새로운 변환 로직을 사용하도록 수정하겠습니다:
+
+yolo-server.py+13-12
+실행 루프에서 단일 박스만 처리하도록 수정하겠습니다:
+
+yolo-server.py+5-4
+마지막으로 통계 출력 부분도 단일 검출에 맞게 수정하겠습니다:
+
+yolo-server.py+2-1
+상태 표시 부분도 수정하겠습니다:
+
+yolo-server.py+1-1
+수정 완료! 주요 변경사항은 다음과 같습니다:
+
+🔧 주요 변경사항
+1. YOLO 검출 로직 개선
+여러 박스 대신 가장 높은 신뢰도의 박스 1개만 선택하도록 변경
+np.argmax()를 사용해서 최고 신뢰도 박스만 반환
+2. 정확한 좌표 변환 로직 추가
+transform_keypoints_to_original() 메서드 추가
+RTMW 크롭 시 사용한 아핀 변환의 역변환을 정확히 계산
+288x384 크롭 좌표를 원본 이미지 좌표로 정확히 변환
+3. 시각화 개선
+정확한 좌표 변환을 사용한 키포인트 표시
+키포인트 인덱스 표시 추가 (디버깅용)
+단일 사람 검출에 맞는 상태 표시
+4. 처리 로직 단순화
+단일 박스만 처리하므로 루프 제거
+통계 출력도 단일 검출에 맞게 수정
+✨ 개선 효과
+성능 향상: 단일 박스만 처리하므로 더 빠른 처리
+정확도 향상: 아핀 변환 역변환으로 정확한 키포인트 좌표
+안정성 향상: 가장 신뢰도 높은 박스만 선택해서 안정적인 추적
+이제 YOLO는 가장 신뢰도 높은 사람 1명만 검출하고, RTMW가 추론한 288x384 크롭 좌표의 키포인트가 원본 이미지에 정확히 매핑되어 표시될 것입니다! 🎯

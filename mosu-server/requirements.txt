@@ -1,0 +1,12 @@
+fastapi==0.104.1
+uvicorn==0.24.0
+websockets==12.0
+torch>=1.13.0
+torchvision>=0.14.0
+opencv-python==4.8.1.78
+numpy==1.24.3
+Pillow==10.0.1
+mmpose>=1.0.0
+mmcv>=2.0.0
+mmdet>=3.0.0
+mmengine>=0.8.0
