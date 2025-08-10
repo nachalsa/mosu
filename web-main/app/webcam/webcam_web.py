@@ -1,11 +1,12 @@
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse, JSONResponse
-from .webcam import WebcamCapture
+from .webcam_skeleton_updated import WebcamCapture
 import traceback
 import logging
 
 router = APIRouter()
 webcam = WebcamCapture()
+webcam.show_skeleton = True
 
 @router.on_event("startup")
 async def startup_event():
