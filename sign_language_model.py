@@ -163,13 +163,14 @@ class SequenceToSequenceSignModel(nn.Module):
         mask = torch.triu(torch.ones(seq_len, seq_len), diagonal=1).bool()
         return mask
     
-    def forward(self, pose_features, vocab_ids=None, frame_masks=None, vocab_masks=None):
+    def forward(self, pose_features, vocab_ids=None, frame_masks=None, vocab_masks=None, force_training_mode=False):
         """
         Args:
             pose_features: [batch, seq_len, 133, 3]
             vocab_ids: [batch, vocab_len] (훈련 시에만)
             frame_masks: [batch, seq_len]
             vocab_masks: [batch, vocab_len]
+            force_training_mode: 테스트에서도 teacher forcing 모드 사용
         """
         batch_size, seq_len = pose_features.shape[:2]
         
@@ -193,8 +194,8 @@ class SequenceToSequenceSignModel(nn.Module):
             src_key_padding_mask=encoder_key_padding_mask
         )
         
-        # 5. 훈련 모드 vs 추론 모드
-        if self.training and vocab_ids is not None:
+        # 5. 모드 결정: 훈련 중이거나 강제 teacher forcing 모드인 경우
+        if (self.training or force_training_mode) and vocab_ids is not None:
             # 훈련 모드: Teacher Forcing
             return self._forward_training(encoder_output, vocab_ids, vocab_masks)
         else:
@@ -267,21 +268,50 @@ class SequenceToSequenceSignModel(nn.Module):
         boundary_labels = targets.get('boundary_labels', None)
         confidence_targets = targets.get('confidence_targets', None)
         
+        # 디버깅을 위한 차원 로깅
+        logger.debug(f"🔍 Loss computation debug:")
+        logger.debug(f"  word_logits shape: {word_logits.shape}")
+        logger.debug(f"  vocab_ids shape: {vocab_ids.shape}")
+        logger.debug(f"  boundary_logits shape: {boundary_logits.shape}")
+        
+        # 차원 일치성 검증
+        batch_size = word_logits.shape[0]
+        seq_len = word_logits.shape[1]
+        
+        # vocab_ids의 배치 크기가 word_logits와 일치하는지 확인
+        if vocab_ids.shape[0] != batch_size:
+            logger.error(f"❌ Batch size mismatch: word_logits={batch_size}, vocab_ids={vocab_ids.shape[0]}")
+            raise ValueError(f"Batch size mismatch: word_logits batch={batch_size}, vocab_ids batch={vocab_ids.shape[0]}")
+        
+        # 시퀀스 길이 일치성 검증 (vocab_ids가 2D인 경우)
+        if len(vocab_ids.shape) > 1 and vocab_ids.shape[1] != seq_len:
+            logger.warning(f"⚠️ Sequence length mismatch: word_logits={seq_len}, vocab_ids={vocab_ids.shape[1]}")
+            # 짧은 쪽에 맞춰 자르기
+            min_len = min(seq_len, vocab_ids.shape[1])
+            word_logits = word_logits[:, :min_len, :]
+            vocab_ids = vocab_ids[:, :min_len]
+            if boundary_logits is not None:
+                boundary_logits = boundary_logits[:, :min_len, :]
+        
         losses = {}
         
         # 1. 단어 분류 손실
         word_loss = F.cross_entropy(
-            word_logits.view(-1, self.vocab_size),
-            vocab_ids.view(-1),
+            word_logits.reshape(-1, self.vocab_size),  # view 대신 reshape 사용
+            vocab_ids.reshape(-1),  # view 대신 reshape 사용
             ignore_index=0  # 패딩 무시
         )
         losses['word_loss'] = word_loss
         
         # 2. 경계 탐지 손실 (있는 경우)
-        if boundary_labels is not None:
+        if boundary_labels is not None and boundary_logits is not None:
+            # 차원 확인 및 조정
+            if len(boundary_labels.shape) > 1:
+                boundary_labels = boundary_labels.reshape(-1)
+            
             boundary_loss = F.cross_entropy(
-                boundary_logits.view(-1, 3),
-                boundary_labels.view(-1),
+                boundary_logits.reshape(-1, 3),  # view 대신 reshape 사용
+                boundary_labels,
                 ignore_index=-1  # 무시할 라벨
             )
             losses['boundary_loss'] = boundary_loss
@@ -289,10 +319,14 @@ class SequenceToSequenceSignModel(nn.Module):
             losses['boundary_loss'] = torch.tensor(0.0, device=word_loss.device)
         
         # 3. 신뢰도 손실 (있는 경우)
-        if confidence_targets is not None:
+        if confidence_targets is not None and confidence_scores is not None:
+            # 차원 확인 및 조정
+            if len(confidence_targets.shape) > 1:
+                confidence_targets = confidence_targets.reshape(-1)
+            
             confidence_loss = F.mse_loss(
-                confidence_scores.view(-1),
-                confidence_targets.view(-1)
+                confidence_scores.reshape(-1),  # view 대신 reshape 사용
+                confidence_targets
             )
             losses['confidence_loss'] = confidence_loss
         else:

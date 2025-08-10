@@ -44,6 +44,13 @@ def create_custom_config(args) -> AdvancedTrainingConfig:
     if args.device:
         config.device = args.device
     
+    # 멀티 GPU 설정
+    if args.multi_gpu:
+        config.multi_gpu = args.multi_gpu
+        
+    if hasattr(args, 'data_parallel') and args.data_parallel is not None:
+        config.use_data_parallel = args.data_parallel
+    
     # 데이터 분할 비율 설정
     if args.train_ratio:
         config.data_split.train_ratio = args.train_ratio
@@ -147,6 +154,10 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="랜덤 시드")
     parser.add_argument("--device", choices=["auto", "cuda", "xpu", "cpu"], 
                        default="auto", help="사용할 디바이스")
+    parser.add_argument("--multi-gpu", action="store_true",
+                       help="멀티 GPU 사용 (CUDA만 지원)")
+    parser.add_argument("--no-data-parallel", action="store_false", dest="data_parallel",
+                       help="DataParallel 사용 안함 (멀티 GPU 시)")
     parser.add_argument("--experiment-name", type=str, 
                        default="multi_stage_training", help="실험 이름")
     

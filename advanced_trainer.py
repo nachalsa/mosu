@@ -54,12 +54,20 @@ class AdvancedSignLanguageTrainer:
         }
         
         # 디바이스 설정 (개선된 방식)
-        self.device = DeviceManager.detect_best_device(self.config.device)
+        self.device = DeviceManager.detect_best_device(self.config.device, self.config.multi_gpu)
         device_info = DeviceManager.get_device_info(self.device)
         logger.info(f"🚀 디바이스 설정 완료: {device_info['name']}")
         
+        # 멀티 GPU 정보
+        self.multi_gpu_available = DeviceManager.is_multi_gpu_available()
+        if self.config.multi_gpu and self.multi_gpu_available:
+            logger.info(f"🚀 멀티 GPU 모드 활성화: {torch.cuda.device_count()}개 GPU")
+        elif self.config.multi_gpu and not self.multi_gpu_available:
+            logger.warning("⚠️ 멀티 GPU 요청되었으나 사용 불가 - 단일 GPU/CPU 사용")
+            self.config.multi_gpu = False
+        
         # 디바이스별 최적화
-        DeviceManager.optimize_for_device(self.device)
+        DeviceManager.optimize_for_device(self.device, self.config.multi_gpu)
     
     def load_and_prepare_data(self) -> Tuple[UnifiedSignLanguageDataset, StratifiedDataSplitter]:
         """데이터 로드 및 분할 준비"""
@@ -101,6 +109,15 @@ class AdvancedSignLanguageTrainer:
             max_seq_len=200,
             dropout=stage_config.dropout_rate
         )
+        
+        # 멀티 GPU 설정
+        if self.config.multi_gpu and self.multi_gpu_available:
+            model = DeviceManager.setup_multi_gpu(
+                model, self.device, self.config.use_data_parallel
+            )
+        else:
+            model = model.to(self.device)
+            
         return model
     
     def setup_stage_training(self, 
@@ -165,10 +182,16 @@ class AdvancedSignLanguageTrainer:
                 'noise_std': 0.005 * stage_config.augmentation_strength
             }
         
-        # 데이터로더 생성
+        # 데이터로더 생성 (멀티 GPU에 맞는 배치 크기 조정)
+        effective_batch_size = stage_config.batch_size
+        if self.config.multi_gpu and self.config.auto_adjust_batch_size:
+            effective_batch_size = DeviceManager.get_effective_batch_size(
+                stage_config.batch_size, self.device
+            )
+        
         train_dataloader, val_dataloader, test_dataloader = splitter.create_dataloaders(
             dataset=base_dataset,
-            batch_size=stage_config.batch_size,
+            batch_size=effective_batch_size,
             enable_train_augmentation=stage_config.enable_augmentation,
             augmentation_config=augmentation_config
         )
@@ -301,25 +324,55 @@ class AdvancedSignLanguageTrainer:
         total_loss = 0
         total_metrics = {'word_accuracy': 0, 'boundary_accuracy': 0}
         
-        for batch in tqdm(test_dataloader, desc="테스트 평가"):
+        for batch_idx, batch in enumerate(tqdm(test_dataloader, desc="테스트 평가")):
             # GPU로 이동
             pose_features = batch['pose_features'].to(trainer.device)
             vocab_ids = batch['vocab_ids'].to(trainer.device)
             frame_masks = batch['frame_masks'].to(trainer.device)
             vocab_masks = batch['vocab_masks'].to(trainer.device)
             
-            # 추론
-            outputs = model(
-                pose_features=pose_features,
-                vocab_ids=vocab_ids,
-                frame_masks=frame_masks,
-                vocab_masks=vocab_masks
-            )
+            # 디버깅을 위한 배치 정보 로깅 (첫 번째 배치만)
+            if batch_idx == 0:
+                logger.debug(f"🔍 Test batch debug info:")
+                logger.debug(f"  pose_features shape: {pose_features.shape}")
+                logger.debug(f"  vocab_ids shape: {vocab_ids.shape}")
+                logger.debug(f"  frame_masks shape: {frame_masks.shape}")
+                logger.debug(f"  vocab_masks shape: {vocab_masks.shape}")
             
-            # 손실 계산
-            boundary_labels = trainer.create_boundary_labels(vocab_ids, vocab_masks)
-            targets = {'vocab_ids': vocab_ids, 'boundary_labels': boundary_labels}
-            losses = model.compute_loss(outputs, targets, vocab_masks)
+            try:
+                # 추론 - 테스트에서도 Teacher Forcing 모드 사용 (차원 일치를 위해)
+                outputs = model(
+                    pose_features=pose_features,
+                    vocab_ids=vocab_ids,
+                    frame_masks=frame_masks,
+                    vocab_masks=vocab_masks,
+                    force_training_mode=True  # 차원 일치를 위해 강제로 teacher forcing 모드
+                )
+                
+                # 출력 차원 로깅 (첫 번째 배치만)
+                if batch_idx == 0:
+                    logger.debug(f"🔍 Model outputs debug info:")
+                    logger.debug(f"  word_logits shape: {outputs['word_logits'].shape}")
+                    logger.debug(f"  boundary_logits shape: {outputs['boundary_logits'].shape}")
+            
+            except Exception as e:
+                logger.error(f"❌ Model forward pass error at batch {batch_idx}: {e}")
+                logger.error(f"  pose_features shape: {pose_features.shape}")
+                logger.error(f"  vocab_ids shape: {vocab_ids.shape}")
+                raise
+            
+            try:
+                # 손실 계산
+                boundary_labels = trainer.create_boundary_labels(vocab_ids, vocab_masks)
+                targets = {'vocab_ids': vocab_ids, 'boundary_labels': boundary_labels}
+                losses = model.compute_loss(outputs, targets, vocab_masks)
+                
+            except Exception as e:
+                logger.error(f"❌ Loss computation error at batch {batch_idx}: {e}")
+                logger.error(f"  vocab_ids shape: {vocab_ids.shape}")
+                logger.error(f"  outputs word_logits shape: {outputs['word_logits'].shape}")
+                logger.error(f"  boundary_labels shape: {boundary_labels.shape if boundary_labels is not None else 'None'}")
+                raise
             
             total_loss += losses['total_loss'].item()
             
@@ -366,20 +419,15 @@ class AdvancedSignLanguageTrainer:
         first_stage = self.config.multi_stage.stages[0]
         model = self.create_model(base_dataset.vocab_size, first_stage)
         
-        # 디바이스로 이동
-        if self.config.device == "auto":
-            if torch.cuda.is_available():
-                device = torch.device("cuda")
+        # 멀티 GPU 설정
+        if self.config.multi_gpu and DeviceManager.is_multi_gpu_available():
+            if self.config.use_data_parallel and torch.cuda.device_count() > 1:
+                DeviceManager.setup_multi_gpu(model)
+                print(f"🚀 DataParallel 활성화: {torch.cuda.device_count()}개 GPU 사용")
             else:
-                try:
-                    import intel_extension_for_pytorch as ipex
-                    device = torch.device("xpu")
-                except:
-                    device = torch.device("cpu")
-        else:
-            device = torch.device(self.config.device)
-            
-        model.to(device)
+                print("⚠️ 멀티 GPU 요청되었지만 DataParallel 비활성화됨")
+        
+        model.to(self.device)
         
         total_params = sum(p.numel() for p in model.parameters())
         logger.info(f"📊 모델 정보: {total_params:,} 파라미터")
@@ -422,7 +470,7 @@ class AdvancedSignLanguageTrainer:
             )
             
             # 더미 트레이너 생성 (평가용)
-            dummy_trainer = SignLanguageTrainer(model, None, None, device=str(device))
+            dummy_trainer = SignLanguageTrainer(model, None, None, device=str(self.device))
             
             final_test_loss, final_test_metrics = self._evaluate_on_test(
                 model, test_dataloader, dummy_trainer
@@ -459,15 +507,38 @@ class AdvancedSignLanguageTrainer:
         
         # NumPy 배열과 Tensor를 JSON 직렬화 가능하도록 변환
         def convert_for_json(obj):
-            if isinstance(obj, np.ndarray):
+            if isinstance(obj, dict):
+                return {k: convert_for_json(v) for k, v in obj.items()}
+            elif isinstance(obj, (list, tuple)):
+                return [convert_for_json(item) for item in obj]
+            elif isinstance(obj, np.ndarray):
                 return obj.tolist()
             elif isinstance(obj, torch.Tensor):
                 return obj.cpu().numpy().tolist()
             elif isinstance(obj, np.float32):
                 return float(obj)
             elif hasattr(obj, '__dict__'):
-                return {k: convert_for_json(v) for k, v in obj.__dict__.items()}
-            return obj
+                # 설정 객체들을 딕셔너리로 변환 (private 속성 제외)
+                try:
+                    result = {}
+                    for k, v in obj.__dict__.items():
+                        if not k.startswith('_'):  # private 속성 제외
+                            result[k] = convert_for_json(v)
+                    return result
+                except Exception as e:
+                    return str(obj)
+            elif hasattr(obj, '_asdict'):  # namedtuple인 경우
+                return convert_for_json(obj._asdict())
+            elif callable(obj):
+                return str(obj)
+            elif isinstance(obj, (int, float, str, bool, type(None))):
+                return obj
+            else:
+                try:
+                    json.dumps(obj)  # JSON 직렬화 가능한지 테스트
+                    return obj
+                except (TypeError, ValueError):
+                    return str(obj)
         
         serializable_results = convert_for_json(self.experiment_results)
         
