@@ -27,7 +27,8 @@ class WebcamCapture:
         self.h = 480
         self.fps = 10
         self.last_server_result = ""
-        self.mmpose_server_ip = "192.168.100.135:5000"
+        self.mmpose_server_ip = "192.168.100.135:5000"  # 포즈 서버 주소
+        self.mosu_server_ip = "192.168.100.26:8002"     # MOSU 서버 주소
         self.rotation_angle = 0  # 0, 90, 180, 270 도 회전
         
         # Set the path to your .hef file
@@ -229,11 +230,33 @@ class WebcamCapture:
             # 서버 응답을 전역변수 등에 저장 (예시)
             self.last_server_result = str(self.realtime_fps) + "-서버 결과"  # 수정
             if resp.status_code == 200:
-                print("서버 전송 성공")
+                print("포즈 서버 전송 성공")
+                result = resp.json()
+                
+                # MOSU 서버로 추가 전송 (수화 인식)
+                self.send_to_mosu_server(filename, crop_bytes, result)
+                
             else:
-                print("서버 전송 실패")
+                print("포즈 서버 전송 실패")
         except Exception as e:
             print(f"실시간 서버 전송 실패: {e}")
+    
+    def send_to_mosu_server(self, filename, crop_bytes, pose_result):
+        """MOSU 서버로 데이터 전송 (수화 인식)"""
+        try:
+            url = f"http://{self.mosu_server_ip}/health"  # 일단 헬스 체크
+            
+            response = requests.get(url, timeout=5)
+            
+            if response.status_code == 200:
+                print(f"✅ MOSU 서버 연결 확인: {response.json().get('status')}")
+                # 실제로는 여기서 WebSocket이나 다른 방식으로 실시간 통신
+                # TODO: WebSocket 통신으로 포즈 데이터 전송 구현
+            else:
+                print(f"⚠️ MOSU 서버 응답 오류: HTTP {response.status_code}")
+                
+        except Exception as e:
+            print(f"❌ MOSU 서버 전송 실패: {str(e)}")
 
     def process_latest_folder_with_yolo(self):
         """가장 최근 폴더의 이미지를 YOLO로 크롭"""

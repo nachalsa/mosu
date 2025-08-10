@@ -31,10 +31,11 @@ fi
 echo ""
 echo "🚀 MOSU 서버 실행 중..."
 echo "   - 포트: 8001"
-echo "   - 주소: http://localhost:8001"
+echo "   - 주소: http://192.168.100.26:8001"
+echo "   - 네트워크: 192.168.100.26"
 echo "   - Ctrl+C로 종료"
 echo ""
 
 # 서버 실행
 cd mosu-server
-python simple_server.py --port 8001
+python simple_server.py --host 192.168.100.26 --port 8001

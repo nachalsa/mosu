@@ -35,6 +35,9 @@ except ImportError as e:
     MODEL_AVAILABLE = False
     print(f"⚠️ 수화 모델을 로드할 수 없습니다: {e}")
 
+# 포즈 서버 클라이언트 가져오기
+from pose_client import PoseServerClient
+
 # 로깅 설정
 logging.basicConfig(
     level=logging.INFO,
@@ -201,78 +204,48 @@ class RealSignLanguageInferencer:
             logger.error(f"❌ 수화 추론 실패: {e}")
             return None
 
-class DummyPoseEstimator:
-    """더미 포즈 추정기 (개발용)"""
+class NetworkPoseEstimator:
+    """네트워크 포즈 추정기 - pose-server와 통신"""
     
-    def __init__(self):
-        self.device = "cpu"
-        logger.info("✅ 더미 포즈 추정기 초기화")
+    def __init__(self, pose_server_url: str = "http://192.168.100.135:5000"):
+        try:
+            self.pose_client = PoseServerClient(pose_server_url)
+            self.use_network = True
+            self.device = "network"
+            logger.info(f"✅ 네트워크 포즈 추정기 초기화: {pose_server_url}")
+        except Exception as e:
+            logger.warning(f"⚠️ 포즈 서버 연결 실패, 더미 모드로 폴백: {e}")
+            self.use_network = False
+            self.device = "dummy"
     
     def estimate_pose(self, image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-        """더미 포즈 추정 - 움직이는 사람 시뮬레이션"""
+        """이미지에서 포즈 추정"""
+        if self.use_network:
+            return self.pose_client.estimate_pose(image)
+        else:
+            return self._dummy_pose_estimation(image)
+    
+    def _dummy_pose_estimation(self, image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """더미 포즈 추정 (폴백)"""
         h, w = image.shape[:2]
         current_time = time.time()
         
-        # 시간에 따라 움직이는 키포인트 생성
+        # 더미 키포인트 생성 (133개)
         keypoints = np.zeros((133, 2))
         scores = np.zeros(133)
         
         center_x = w // 2 + 50 * np.sin(current_time * 0.5)
         center_y = h // 2 + 30 * np.cos(current_time * 0.3)
         
-        # 얼굴 (0-67): 중앙 상단
-        face_center_x = center_x + 20 * np.sin(current_time * 2)
-        face_center_y = center_y - 100
-        for i in range(68):
-            angle = (i / 68) * 2 * np.pi + current_time * 0.1
-            radius = 30 + 10 * np.sin(current_time * 3 + i)
+        # 랜덤한 키포인트 생성
+        for i in range(133):
+            angle = (i / 133) * 2 * np.pi + current_time * 0.1
+            radius = 100 + 50 * np.sin(current_time + i)
             keypoints[i] = [
-                face_center_x + radius * np.cos(angle),
-                face_center_y + radius * np.sin(angle)
+                center_x + radius * np.cos(angle),
+                center_y + radius * np.sin(angle)
             ]
-            scores[i] = 0.8 + 0.1 * np.sin(current_time * 2 + i)
-        
-        # 왼손 (68-89): 움직이는 손동작
-        left_hand_x = center_x - 150 + 50 * np.sin(current_time * 1.5)
-        left_hand_y = center_y + 30 * np.cos(current_time * 1.2)
-        for i in range(21):
-            finger_angle = (i / 21) * np.pi + current_time
-            keypoints[68 + i] = [
-                left_hand_x + 30 * np.cos(finger_angle),
-                left_hand_y + 30 * np.sin(finger_angle)
-            ]
-            scores[68 + i] = 0.7 + 0.2 * np.sin(current_time * 4 + i)
-        
-        # 오른손 (89-110)
-        right_hand_x = center_x + 150 + 40 * np.cos(current_time * 1.8)
-        right_hand_y = center_y + 20 * np.sin(current_time * 1.5)
-        for i in range(21):
-            finger_angle = (i / 21) * np.pi - current_time
-            keypoints[89 + i] = [
-                right_hand_x + 25 * np.cos(finger_angle),
-                right_hand_y + 25 * np.sin(finger_angle)
-            ]
-            scores[89 + i] = 0.6 + 0.3 * np.cos(current_time * 3 + i)
-        
-        # 몸 키포인트 (110-133)
-        body_positions = [
-            [center_x, center_y - 50],  # 목
-            [center_x - 60, center_y - 30],  # 왼쪽 어깨
-            [center_x + 60, center_y - 30],  # 오른쪽 어깨
-            [center_x, center_y],  # 가슴 중앙
-        ]
-        
-        for i in range(min(23, len(body_positions))):
-            if i < len(body_positions):
-                keypoints[110 + i] = body_positions[i]
-            else:
-                keypoints[110 + i] = [center_x, center_y]
-            scores[110 + i] = 0.9
-        
-        # 나머지 키포인트는 기본값
-        for i in range(110 + len(body_positions), 133):
-            keypoints[i] = [center_x, center_y]
-            scores[i] = 0.5
+            scores[i] = 0.7 + 0.2 * np.sin(current_time * 2 + i)
         
         return keypoints, scores
 
@@ -283,13 +256,14 @@ class RealMosuServer:
                  model_path: str,
                  device: str = "auto",
                  host: str = "0.0.0.0",
-                 port: int = 8002):
+                 port: int = 8002,
+                 pose_server_url: str = "http://192.168.100.135:5000"):
         
         self.host = host
         self.port = port
         
         # 컴포넌트 초기화
-        self.pose_estimator = DummyPoseEstimator()  # RTMW 대신 더미 사용
+        self.pose_estimator = NetworkPoseEstimator(pose_server_url)
         
         try:
             self.sign_inferencer = RealSignLanguageInferencer(model_path, device)
@@ -330,7 +304,17 @@ class RealMosuServer:
                 "model_type": model_type,
                 "vocab_size": vocab_size,
                 "connections": len(self.connections),
-                "device": getattr(self.sign_inferencer, 'device', 'cpu')
+                "device": getattr(self.sign_inferencer, 'device', 'cpu'),
+                "pose_server": {
+                    "type": "network" if hasattr(self.pose_estimator, 'use_network') and self.pose_estimator.use_network else "dummy",
+                    "url": "http://192.168.100.135:5000"
+                },
+                "network_info": {
+                    "host": self.host,
+                    "port": self.port,
+                    "local_url": f"http://{self.host}:{self.port}",
+                    "network_url": f"http://192.168.100.26:{self.port}"
+                }
             }
         
         @self.app.get("/stats")

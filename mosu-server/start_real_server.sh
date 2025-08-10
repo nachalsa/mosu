@@ -38,11 +38,12 @@ fi
 echo ""
 echo "🚀 실제 MOSU 서버 실행 중..."
 echo "   - 포트: 8002"
-echo "   - 주소: http://localhost:8002"
+echo "   - 주소: http://192.168.100.26:8002"
+echo "   - 네트워크: 192.168.100.26"
 echo "   - 실제 Transformer 모델 사용"
 echo "   - Ctrl+C로 종료"
 echo ""
 
 # 서버 실행
 cd mosu-server
-python real_server.py --model ../mosumodel/best_model_stage_1.pt --device auto --port 8002
+python real_server.py --model ../mosumodel/best_model_stage_1.pt --device auto --host 192.168.100.26 --port 8002
