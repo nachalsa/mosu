@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-MOSU 클라이언트 라우터
-MOSU 서버(192.168.100.26:8002)와 통신하는 웹 인터페이스
+로컬 테스트용 MOSU 클라이언트 
+localhost:8000 백엔드와 연결
 """
 
 from fastapi import APIRouter, Request
@@ -9,16 +9,16 @@ from fastapi.responses import HTMLResponse
 
 router = APIRouter()
 
-@router.get("/", response_class=HTMLResponse)
-async def mosu_client_page(request: Request):
-    """MOSU 실시간 수화 인식 클라이언트"""
+@router.get("/local", response_class=HTMLResponse)
+async def mosu_local_client_page(request: Request):
+    """MOSU 로컬 테스트 클라이언트"""
     return """
     <!DOCTYPE html>
     <html lang="ko">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>MOSU 실시간 수화 인식</title>
+        <title>MOSU 로컬 테스트</title>
         <style>
             body {
                 font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -42,6 +42,16 @@ async def mosu_client_page(request: Request):
                 text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
             }
             
+            .test-banner {
+                background: rgba(255, 193, 7, 0.2);
+                border: 2px solid #ffc107;
+                padding: 15px;
+                border-radius: 10px;
+                margin-bottom: 30px;
+                text-align: center;
+                font-weight: bold;
+            }
+            
             .main-content {
                 display: grid;
                 grid-template-columns: 2fr 1fr;
@@ -49,15 +59,7 @@ async def mosu_client_page(request: Request):
                 margin-bottom: 30px;
             }
             
-            .video-section {
-                background: rgba(255, 255, 255, 0.1);
-                padding: 25px;
-                border-radius: 15px;
-                backdrop-filter: blur(10px);
-                box-shadow: 0 8px 32px rgba(0,0,0,0.1);
-            }
-            
-            .controls-section {
+            .video-section, .controls-section {
                 background: rgba(255, 255, 255, 0.1);
                 padding: 25px;
                 border-radius: 15px;
@@ -72,16 +74,6 @@ async def mosu_client_page(request: Request):
                 border-radius: 10px;
                 object-fit: cover;
                 box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-            }
-            
-            .control-group {
-                margin-bottom: 20px;
-            }
-            
-            .control-group h3 {
-                margin: 0 0 10px 0;
-                color: #fff;
-                font-size: 1.2em;
             }
             
             button {
@@ -150,37 +142,9 @@ async def mosu_client_page(request: Request):
                 text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
             }
             
-            .word-history {
-                max-height: 200px;
-                overflow-y: auto;
-                background: rgba(0, 0, 0, 0.1);
-                padding: 15px;
-                border-radius: 10px;
-                margin-top: 20px;
-            }
-            
-            .word-item {
-                background: rgba(255, 255, 255, 0.1);
-                margin: 5px 0;
-                padding: 10px 15px;
-                border-radius: 8px;
-                display: flex;
-                justify-content: space-between;
-                align-items: center;
-            }
-            
-            .confidence {
-                background: rgba(33, 150, 243, 0.2);
-                color: #2196F3;
-                padding: 4px 8px;
-                border-radius: 5px;
-                font-size: 0.9em;
-                font-weight: bold;
-            }
-            
             .stats-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+                grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
                 gap: 15px;
                 margin-top: 20px;
             }
@@ -193,7 +157,7 @@ async def mosu_client_page(request: Request):
             }
             
             .stat-value {
-                font-size: 2em;
+                font-size: 1.5em;
                 font-weight: bold;
                 color: #4CAF50;
                 margin-bottom: 5px;
@@ -203,31 +167,21 @@ async def mosu_client_page(request: Request):
                 font-size: 0.9em;
                 opacity: 0.8;
             }
-            
-            @media (max-width: 768px) {
-                .main-content {
-                    grid-template-columns: 1fr;
-                }
-                
-                .results-section {
-                    grid-column: span 1;
-                }
-                
-                .current-word {
-                    font-size: 2em;
-                }
-            }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>🤟 MOSU 실시간 수화 인식</h1>
+            <h1>🏠 MOSU 로컬 테스트</h1>
+            
+            <div class="test-banner">
+                ⚠️ 로컬 테스트 모드 - 백엔드: localhost:8000
+            </div>
             
             <div class="main-content">
                 <div class="video-section">
                     <h3>📹 웹캠 영상</h3>
                     <video id="video" autoplay muted playsinline></video>
-                    <div class="control-group">
+                    <div>
                         <button id="start-btn" onclick="startCamera()">🎥 카메라 시작</button>
                         <button id="stop-btn" onclick="stopCamera()" disabled>⏹️ 카메라 정지</button>
                         <button onclick="clearResults()">🧹 결과 지우기</button>
@@ -235,19 +189,14 @@ async def mosu_client_page(request: Request):
                 </div>
                 
                 <div class="controls-section">
-                    <div class="control-group">
-                        <h3>🔗 연결 상태</h3>
-                        <div id="connection-status" class="status disconnected">
-                            ❌ 연결 안됨
-                        </div>
+                    <h3>🔗 연결 상태</h3>
+                    <div id="connection-status" class="status disconnected">
+                        ❌ 연결 안됨
                     </div>
                     
-                    <div class="control-group">
-                        <h3>⚙️ 설정</h3>
-                        <p>통합 백엔드: 192.168.100.26:8001</p>
-                        <p>프레임 전송: 15fps</p>
-                        <p>해상도: 640x480</p>
-                    </div>
+                    <h3>⚙️ 로컬 설정</h3>
+                    <p>통합 백엔드: localhost:8000</p>
+                    <p>웹 클라이언트: localhost:8001</p>
                     
                     <div class="stats-grid">
                         <div class="stat-card">
@@ -256,7 +205,11 @@ async def mosu_client_page(request: Request):
                         </div>
                         <div class="stat-card">
                             <div class="stat-value" id="word-count">0</div>
-                            <div class="stat-label">인식된 단어</div>
+                            <div class="stat-label">단어</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-value" id="buffer-size">0</div>
+                            <div class="stat-label">버퍼</div>
                         </div>
                     </div>
                 </div>
@@ -267,10 +220,7 @@ async def mosu_client_page(request: Request):
                 <div class="current-word" id="current-word">대기 중...</div>
                 <div style="text-align: center;">
                     <span>신뢰도: </span>
-                    <span id="confidence" class="confidence">0%</span>
-                </div>
-                <div class="word-history" id="word-history">
-                    <p style="text-align: center; opacity: 0.7;">인식된 단어들이 여기에 표시됩니다</p>
+                    <span id="confidence" style="background: rgba(33, 150, 243, 0.2); color: #2196F3; padding: 4px 8px; border-radius: 5px;">0%</span>
                 </div>
             </div>
         </div>
@@ -281,26 +231,31 @@ async def mosu_client_page(request: Request):
             let isStreaming = false;
             let frameCount = 0;
             let lastFrameTime = Date.now();
-            let detectedWords = [];
 
-            // WebSocket 연결
+            // WebSocket 연결 (localhost)
             function connectWebSocket() {
-                const wsUrl = 'ws://192.168.100.26:8001/ws';
+                const wsUrl = 'ws://localhost:8000/ws';
                 
                 ws = new WebSocket(wsUrl);
                 
                 ws.onopen = function() {
                     const statusEl = document.getElementById('connection-status');
-                    statusEl.textContent = '✅ 연결됨';
+                    statusEl.textContent = '✅ 로컬 연결됨';
                     statusEl.className = 'status connected';
-                    console.log('MOSU 서버 연결 성공');
+                    console.log('로컬 통합 백엔드 연결 성공');
                 };
                 
                 ws.onmessage = function(event) {
                     const data = JSON.parse(event.data);
                     
-                    if (data.type === 'result') {
-                        updateResults(data);
+                    if (data.type === 'result' && data.word) {
+                        document.getElementById('current-word').textContent = data.word;
+                        document.getElementById('confidence').textContent = 
+                            Math.round(data.confidence * 100) + '%';
+                        document.getElementById('word-count').textContent = data.frame_id || 0;
+                    } else if (data.type === 'status') {
+                        document.getElementById('fps').textContent = Math.round(data.fps || 0);
+                        document.getElementById('buffer-size').textContent = data.buffer_size || 0;
                     }
                 };
                 
@@ -334,7 +289,6 @@ async def mosu_client_page(request: Request):
                     document.getElementById('start-btn').disabled = true;
                     document.getElementById('stop-btn').disabled = false;
                     
-                    // 프레임 전송 시작
                     startFrameCapture();
                     
                 } catch (err) {
@@ -386,7 +340,6 @@ async def mosu_client_page(request: Request):
                         }
                     }, 'image/jpeg', 0.8);
                     
-                    // 15fps로 제한
                     setTimeout(captureFrame, 1000/15);
                 }
                 
@@ -399,63 +352,22 @@ async def mosu_client_page(request: Request):
                 const now = Date.now();
                 
                 if (now - lastFrameTime >= 1000) {
-                    const fps = Math.round(frameCount * 1000 / (now - lastFrameTime));
-                    document.getElementById('fps').textContent = fps;
+                    const clientFps = Math.round(frameCount * 1000 / (now - lastFrameTime));
+                    // 서버 FPS는 status 메시지로 업데이트됨
                     
                     frameCount = 0;
                     lastFrameTime = now;
                 }
             }
 
-            // 결과 업데이트
-            function updateResults(data) {
-                if (data.word && data.word !== '대기 중...') {
-                    document.getElementById('current-word').textContent = data.word;
-                    document.getElementById('confidence').textContent = Math.round(data.confidence * 100) + '%';
-                    
-                    // 단어 히스토리에 추가
-                    detectedWords.unshift({
-                        word: data.word,
-                        confidence: data.confidence,
-                        timestamp: new Date().toLocaleTimeString()
-                    });
-                    
-                    if (detectedWords.length > 20) {
-                        detectedWords = detectedWords.slice(0, 20);
-                    }
-                    
-                    updateWordHistory();
-                    document.getElementById('word-count').textContent = detectedWords.length;
-                }
-            }
-
-            // 단어 히스토리 업데이트
-            function updateWordHistory() {
-                const historyEl = document.getElementById('word-history');
-                
-                if (detectedWords.length === 0) {
-                    historyEl.innerHTML = '<p style="text-align: center; opacity: 0.7;">인식된 단어들이 여기에 표시됩니다</p>';
-                    return;
-                }
-                
-                historyEl.innerHTML = detectedWords.map(item => `
-                    <div class="word-item">
-                        <span>${item.word} (${item.timestamp})</span>
-                        <span class="confidence">${Math.round(item.confidence * 100)}%</span>
-                    </div>
-                `).join('');
-            }
-
             // 결과 지우기
             function clearResults() {
-                detectedWords = [];
                 document.getElementById('current-word').textContent = '대기 중...';
                 document.getElementById('confidence').textContent = '0%';
                 document.getElementById('word-count').textContent = '0';
-                updateWordHistory();
             }
 
-            // 페이지 로드 시 WebSocket 연결
+            // 페이지 로드 시 연결
             window.onload = function() {
                 connectWebSocket();
             };
